@@ -134,7 +134,7 @@ try:
     (stage/'licenses/README.txt').write_text('Third-party notices are retained by component. COMPONENTS.json maps the distributed binaries to their licenses and checksums. Qt is dynamically linked; compatible DLL replacements are permitted under its licenses. Complete matching IDE sources are in RedPandaRust-Sources.zip.\n',encoding='utf-8')
     report={'modules':len(seen),'unresolved':[],'extraDependencies':extra,'licenseComponents':len(notices),'sourceBase':'18e9afbc8a60a4e5568362fc5e8011a8050cc84c'}
     (stage/'RUNTIME.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
-    (stage/'COPYRIGHT.txt').write_text('Red Panda Rust\nRust modifications copyright (C) 2026 Raffaele Mele.\nOriginal code copyright (C) 2020-2026 Roy Qu and contributors.\nGPL-3.0-or-later; original notices and dependency licenses retained.\n',encoding='utf-8')
+    (stage/'COPYRIGHT.txt').write_text('Red Panda Rust\nModifiche del fork e adattamento Rust:\nCopyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)\nOriginal RedPanda-CPP/QSynEdit code: copyright (C) 2020-2026 Roy Qu and contributors.\nGPL-3.0-or-later; original notices and dependency licenses retained.\n',encoding='utf-8')
     stage.rename(args.output)
     with zipfile.ZipFile(args.output.with_suffix('.zip'),'w',zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
         for file in sorted(args.output.rglob('*')):

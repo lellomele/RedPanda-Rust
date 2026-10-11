@@ -22,4 +22,4 @@ Richiede CMake, Ninja, C++17 e Qt 6.8+ (Core, Concurrent, Gui, LinguistTools, Ne
 
 ## Copyright
 
-Il codice originale RedPanda-CPP/QSynEdit è di Roy Qu (`royqh1979`) e dei contributori. Le modifiche del fork rmele e l’adattamento Rust sono di Raffaele Mele; le nuove parti Rust sono © 2026 Raffaele Mele. GPL-3.0-or-later. La distinzione tra le parti e le licenze delle dipendenze è documentata in [ATTRIBUTIONS.md](ATTRIBUTIONS.md); gli avvisi originali sono conservati.
+Il codice originale RedPanda-CPP/QSynEdit è di Roy Qu (`royqh1979`) e dei contributori. Le modifiche del fork rmele e l’adattamento Rust recano **Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)**. GPL-3.0-or-later. La distinzione tra le parti e le licenze delle dipendenze è documentata in [ATTRIBUTIONS.md](ATTRIBUTIONS.md); gli avvisi originali sono conservati.

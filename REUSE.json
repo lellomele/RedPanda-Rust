@@ -1,11 +1,12 @@
 {
   "repository": "https://github.com/lellomele/RedPanda-CPP",
   "commit": "18e9afbc8a60a4e5568362fc5e8011a8050cc84c",
-  "unchangedInheritedFiles": 2546,
+  "unchangedInheritedFiles": 2543,
   "modifiedInheritedFiles": [
     ".gitignore",
     "AGENTS.md",
     "CMakeLists.txt",
+    "FORK_NOTICE.txt",
     "README.it.md",
     "README.md",
     "RedPandaIDE/CMakeLists.txt",
@@ -23,6 +24,8 @@
     "RedPandaIDE/src/utils/file.cpp",
     "RedPandaIDE/src/utils/file.h",
     "RedPandaIDE/src/widgets/aboutdialog.cpp",
+    "RedPandaIDE/src/widgets/aboutdialog.ui",
+    "docs/qsynedit-redesign.txt",
     "libs/qsynedit/CMakeLists.txt",
     "libs/qsynedit/qsynedit/syntaxer/cpp.cpp",
     "libs/qsynedit/qsynedit/types.h",
@@ -36,7 +39,7 @@
     "platform/linux/icons/512x512/apps/redpandaide.png",
     "platform/linux/icons/64x64/apps/redpandaide.png",
     "platform/linux/redpandaide.svg",
-    "platform/windows/fork-packaging/distribution.nsi",
+    "platform/windows/templates/Single Dialog Application/Single_Dialog_Application_main.c.txt",
     "version.json"
   ],
   "removedInheritedFiles": [

@@ -138,6 +138,7 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
         check("Dedicated GitHub URL",home&&home->text().contains("https://github.com/lellomele/RedPanda-Rust"));
         check("Original code scope",roy&&roy->text().contains("Roy Qu")&&roy->text().contains("QSynEdit"));
         check("Rust changes scope",mele&&mele->text().contains("Raffaele Mele")&&mele->text().contains("Rust/Cargo"));
+        check("Exact fork copyright",mele&&mele->text().contains(QString::fromUtf8("Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)")));
         check("About screenshot",about.grab().save(outputDir+"/about.png"));about.close();
     }
     {

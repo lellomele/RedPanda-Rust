@@ -5,8 +5,8 @@ Red Panda Rust deriva dal fork [lellomele/RedPanda-CPP](https://github.com/lello
 | Parte | Attribuzione |
 |---|---|
 | Codice originale RedPanda-CPP, editor QSynEdit, interfaccia Qt, temi e servizi ereditati | Roy Qu (`royqh1979`) e contributori, con gli anni e gli avvisi conservati nei singoli file |
-| Modifiche del fork RedPanda-CPP rmele | Raffaele Mele; vedere gli avvisi originali e la documentazione del fork conservata nei sorgenti |
-| Adattamento Red Panda Rust: servizio Cargo/rustc, sintassi Rust, console, impostazioni degli strumenti, correzioni specifiche e identità dell’app | © 2026 Raffaele Mele |
+| Modifiche del fork RedPanda-CPP rmele | Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com); vedere gli avvisi originali e la documentazione del fork conservata nei sorgenti |
+| Adattamento Red Panda Rust: servizio Cargo/rustc, sintassi Rust, console, impostazioni degli strumenti, correzioni specifiche e identità dell’app | Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com) |
 | Logo Rust derivato dal panda originale e risorse grafiche ereditate | Attribuzioni originali conservate; adattamento Rust di Raffaele Mele |
 | Qt, librerie, font, traduzioni e icone di terze parti | Rispettivi autori e licenze, documentati in `Contributors.md`, negli avvisi dei componenti e nella cartella `licenses` dei pacchetti |
 
