@@ -338,6 +338,7 @@ public:
     void setGetMacroVarsFunc(const GetMacroVarsFunc &newGetMacroVarsFunc);
 
 signals:
+    void rustCompletionRequested();
     void fileSaving(Editor *e, const QString& filename);
     void fileSaveError(Editor *e, const QString& filename, const QString& reason);
     void fileSaved(Editor *e, const QString& filename);

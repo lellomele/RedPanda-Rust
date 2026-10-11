@@ -1840,6 +1840,8 @@ void Editor::onAutoBackupTimer()
 
 void Editor::onTooltipTimer()
 {
+    if(syntaxer()&&syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust)
+        return; // RustEditorSupport displays semantic and diagnostic tooltips.
     if (mHoverModifiedLine != -1)
         return;
 
@@ -2148,6 +2150,10 @@ void Editor::gotoBlockEnd()
 
 void Editor::showCodeCompletion()
 {
+    if(syntaxer()&&syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust){
+        emit rustCompletionRequested();
+        return;
+    }
     if (!mCodeCompletionEnabled)
         return;
 
@@ -3278,6 +3284,8 @@ void Editor::exportAsHTML(const QString &htmlFilename)
 
 void Editor::showCompletion(const QString& preWord,bool autoComplete, CodeCompletionType type)
 {
+    if(syntaxer()&&syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust)
+        return; // Rust completion is asynchronous and owned by RustEditorSupport.
     if(!mCompletionPopup)
         return;
     if (mFunctionTooltip) mFunctionTooltip->hide();

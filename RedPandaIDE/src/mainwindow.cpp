@@ -1,4 +1,5 @@
 #include "rustworkspace.h"
+#include "rustlspclient.h"
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QPushButton>
@@ -563,6 +564,8 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     mQuitting=true;
+    delete mRustLanguageClient;
+    mRustLanguageClient=nullptr;
     mCCHandler.stop();
     if (mProject)
         mProject=nullptr;
@@ -3718,6 +3721,7 @@ void MainWindow::updateTools()
         delete oldToolActions[i];
     }
     ui->menuTools->addAction(ui->actionOptions);
+    if(mRustRestartAnalyzer)ui->menuTools->addAction(mRustRestartAnalyzer);
     if (!mToolsManager->tools().isEmpty()) {
         ui->menuTools->addSeparator();
         QList<QAction*> actions;

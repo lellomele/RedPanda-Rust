@@ -171,7 +171,9 @@ Editor* EditorManager::newEditor(const QString& filename, const QByteArray& enco
         }
         //checkSyntaxInBack();
     }
-    return candidate.release();
+    Editor *opened=candidate.release();
+    emit editorOpenned();
+    return opened;
 }
 
 QTabWidget*  EditorManager::getNewEditorPageControl() const {

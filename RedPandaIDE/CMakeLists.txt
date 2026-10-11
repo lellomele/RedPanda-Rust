@@ -19,6 +19,8 @@ target_qt_plain_cpp(RedPandaIDE
     src/diagnosticcatalog
     src/sessionstore
     src/rusttools
+    src/rustlspclient
+    src/rusteditorsupport
     src/colorscheme
     src/customfileiconprovider
     src/projectoptions

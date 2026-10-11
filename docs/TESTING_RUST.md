@@ -1,5 +1,7 @@
 # Verifiche Rust
 
+Le suite esistenti coprono editor e workflow di compilazione descritti sotto. L’integrazione LSP introdotta nella versione 0.2.3 è stata compilata; non sono state eseguite nuove prove funzionali LSP e non è coperta da queste suite.
+
 Compilare il target `rust-workflow-checks` con CMake. Richiede Qt Test e una toolchain Cargo funzionante; crea soltanto progetti temporanei senza dipendenze esterne.
 
 La suite copre stato della sintassi (commenti annidati, stringhe raw, lifetime, sorgenti incompleti), Cargo check/build/run/test/clippy/fmt, diagnostiche e percorsi Windows, avvio fallito e ripartenza, input senza newline, interruzione con processi figli e limite di output.

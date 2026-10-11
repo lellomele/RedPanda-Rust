@@ -4,6 +4,8 @@
 #include "ui_mainwindow.h"
 #include "rustworkspace.h"
 #include "rusttools.h"
+#include "rustlspclient.h"
+#include "rusteditorsupport.h"
 #include "settings.h"
 #include "editor.h"
 #include "editormanager.h"
@@ -25,6 +27,31 @@
 void MainWindow::initRustWorkspace() {
     RustTools::setSettingsFile(pSettings->filename());
     mRustWorkspace=new RustWorkspace(this);
+    mRustLanguageClient=new RustLspClient(this);
+    auto languageStatus=new QLabel(tr("rust-analyzer: in attesa di un file Rust"),this);
+    languageStatus->setObjectName("rustAnalyzerStatus");
+    languageStatus->setMaximumWidth(350);ui->statusbar->addPermanentWidget(languageStatus);
+    connect(mRustLanguageClient,&RustLspClient::status,this,[this,languageStatus](const QString &text){
+        languageStatus->setText(text.left(75));languageStatus->setToolTip(text);
+        statusBar()->showMessage(text,8000);
+    });
+    auto attach=[this]{
+        for(int i=0;i<mEditorManager->pageCount();++i){
+            auto editor=(*mEditorManager)[i];
+            if(editor->findChild<RustEditorSupport *>("rustEditorSupport",Qt::FindDirectChildrenOnly))continue;
+            auto support=new RustEditorSupport(editor,mRustLanguageClient);
+            connect(support,&RustEditorSupport::definitionRequested,this,[this](const QString &file,int line,int character){
+                if(auto target=openFile(file)){
+                    if(line>=0&&line<target->lineCount()&&character>=0&&character<=target->lineText(line).size())
+                        target->setCaretXYCentered({character,line});
+                }
+            });
+        }
+    };
+    connect(mEditorManager,&EditorManager::editorOpenned,this,attach);attach();
+    mRustRestartAnalyzer=new QAction(tr("Riavvia rust-analyzer"),this);
+    ui->menuTools->addAction(mRustRestartAnalyzer);
+    connect(mRustRestartAnalyzer,&QAction::triggered,mRustLanguageClient,&RustLspClient::restart);
     mCompilerSet->hide();ui->toolbarCompilerSet->setVisible(false);
     ui->actionCompile->setText(tr("Compila Rust"));
     ui->actionRebuild->setText(tr("Controlla Rust"));

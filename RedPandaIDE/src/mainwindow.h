@@ -60,6 +60,7 @@ enum class RunType {
 
 
 class RustWorkspace;
+class RustLspClient;
 class EditorManager;
 class QLabel;
 class QComboBox;
@@ -1077,6 +1078,8 @@ private:
     void openRustWorkspace();
     void createRustWorkspace();
     RustWorkspace *mRustWorkspace=nullptr;
+    RustLspClient *mRustLanguageClient=nullptr;
+    QAction *mRustRestartAnalyzer=nullptr;
     QString mRustRoot;
     QSortFilterProxyModel *mProjectProxyModel;
     

@@ -32,7 +32,7 @@ RustToolsWidget::RustToolsWidget(const QString &name,const QString &group,IconsM
     }
     mEdition=new QComboBox(this);mEdition->setObjectName("rustSingleFileEdition");mEdition->addItems({"2015","2018","2021","2024"});
     layout->addRow(tr("Edizione dei file singoli"),mEdition);
-    auto *editionHelp=new QLabel(tr("Nei progetti Cargo l'edizione viene letta da Cargo.toml. Rust-analyzer è configurabile, ma il completamento semantico non è ancora integrato."),this);
+    auto *editionHelp=new QLabel(tr("Nei progetti Cargo l'edizione viene letta da Cargo.toml. Rust-analyzer fornisce analisi semantica, completamento e informazioni sui simboli. Dopo aver cambiato i percorsi, usa Strumenti → Riavvia rust-analyzer. I sorgenti della libreria standard richiedono il componente rust-src di rustup."),this);
     editionHelp->setWordWrap(true);layout->addRow(editionHelp);
     mVerify=new QPushButton(tr("Verifica strumenti"),this);mVerify->setObjectName("verifyRustTools");layout->addRow(mVerify);
     mProbe=new QProcess(this);mProbe->setProcessChannelMode(QProcess::MergedChannels);

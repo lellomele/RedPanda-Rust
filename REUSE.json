@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/lellomele/RedPanda-CPP",
   "commit": "18e9afbc8a60a4e5568362fc5e8011a8050cc84c",
-  "unchangedInheritedFiles": 2543,
+  "unchangedInheritedFiles": 2541,
   "modifiedInheritedFiles": [
     ".gitignore",
     "AGENTS.md",
@@ -14,6 +14,8 @@
     "RedPandaIDE/resources/windows_icon.rc",
     "RedPandaIDE/src/appidentity.h",
     "RedPandaIDE/src/editor.cpp",
+    "RedPandaIDE/src/editor.h",
+    "RedPandaIDE/src/editormanager.cpp",
     "RedPandaIDE/src/main.cpp",
     "RedPandaIDE/src/mainwindow.cpp",
     "RedPandaIDE/src/mainwindow.h",
@@ -100,6 +102,10 @@
     "tools/package-rust.py",
     "test/data/rust-large.rs",
     "RedPandaIDE/src/mainwindowrust.cpp",
+    "RedPandaIDE/src/rusteditorsupport.cpp",
+    "RedPandaIDE/src/rusteditorsupport.h",
+    "RedPandaIDE/src/rustlspclient.cpp",
+    "RedPandaIDE/src/rustlspclient.h",
     "RedPandaIDE/src/rusttools.cpp",
     "RedPandaIDE/src/rusttools.h",
     "RedPandaIDE/src/rustuichecks.cpp",
