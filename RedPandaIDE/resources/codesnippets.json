@@ -1,0 +1,187 @@
+[
+    {
+        "caption": "for(;;)",
+        "code": "for(%REPL_BEGIN%int i=0%REPL_END%;%REPL_BEGIN%i<=0%REPL_END%;%REPL_BEGIN%i++%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}",
+        "description": "",
+        "prefix": "for(;;)",
+        "section": -1
+    },
+    {
+        "caption": "if else",
+        "code": "if(%REPL_BEGIN%1%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}else{\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}",
+        "description": "",
+        "prefix": "if_else",
+        "section": -1
+    },
+    {
+        "caption": "if else if",
+        "code": "if(%REPL_BEGIN%1%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}else if(%REPL_BEGIN%1%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}else{\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}",
+        "description": "",
+        "prefix": "if_else_if",
+        "section": -1
+    },
+    {
+        "caption": "if()",
+        "code": "if(%REPL_BEGIN%1%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}",
+        "description": "",
+        "prefix": "if()",
+        "section": -1
+    },
+    {
+        "caption": "while()",
+        "code": "while(%REPL_BEGIN%1%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}",
+        "description": "",
+        "prefix": "while()",
+        "section": -1
+    },
+    {
+        "caption": "class{;;}",
+        "code": "class %REPL_BEGIN%YourClassName%REPL_END% {\r\n\t\t%REPL_BEGIN%int YourVar%REPL_END%;\r\n\tpublic:\r\n\t\t%REPL_BEGIN%YourClassName%REPL_END%() {\r\n\r\n\t\t}\r\n\t\t~%REPL_BEGIN%YourClassName%REPL_END%() {\r\n\r\n\t\t}\r\n\t\t%REPL_BEGIN%void YourMethodOrFunction%REPL_END%() {\r\n\r\n\t\t}\r\n};",
+        "description": "",
+        "prefix": "class{;;}",
+        "section": -1
+    },
+    {
+        "caption": "switch(){}",
+        "code": "switch (%REPL_BEGIN%1%REPL_END%) {\r\n\tcase %REPL_BEGIN%1%REPL_END%:\r\n\t\t%REPL_BEGIN%//TODO%REPL_END%\r\n\t\tbreak;\r\n\tcase %REPL_BEGIN%2%REPL_END%:\r\n\t\t%REPL_BEGIN%//TODO%REPL_END%\r\n\t\tbreak;\r\n\tdefault:\r\n\t\t%REPL_BEGIN%//TODO%REPL_END%\r\n\t\tbreak;\r\n}",
+        "description": "",
+        "prefix": "switch(){}",
+        "section": -1
+    },
+    {
+        "caption": "do{}while()",
+        "code": "do{\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n}while(%REPL_BEGIN%1%REPL_END%);",
+        "description": "",
+        "prefix": "do{}while()",
+        "section": -1
+    },
+    {
+        "caption": "function()",
+        "code": "%REPL_BEGIN%int YourFunctionName%REPL_END%(%REPL_BEGIN%int YourParaments%REPL_END%){\r\n\t%REPL_BEGIN%//TODO%REPL_END%\r\n\treturn %REPL_BEGIN%0%REPL_END%;\r\n}",
+        "description": "",
+        "prefix": "function()",
+        "section": -1
+    },
+    {
+        "caption": "Comment Header",
+        "code": "/**\r\n * @file %REPL_BEGIN%<SOURCENAME>%REPL_END% \r\n * @brief: %INSERT%\r\n * @version: %INSERT% \r\n * @copyright: %INSERT%\r\n * @author: %INSERT%\r\n * @date: <DATETIME>\r\n * \r\n **/",
+        "description": "",
+        "prefix": "",
+        "section": 0
+    },
+    {
+        "caption": "Date/Time",
+        "code": "<DATETIME>",
+        "description": "",
+        "prefix": "",
+        "section": 0
+    },
+    {
+        "caption": "Range for",
+        "prefix": "range_for",
+        "language": "cpp",
+        "code": "for (const auto& %REPL_BEGIN%value%REPL_END% : %REPL_BEGIN%container%REPL_END%) {\n\t%INSERT%\n}",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Lambda",
+        "prefix": "lambda",
+        "language": "cpp",
+        "code": "auto %REPL_BEGIN%fn%REPL_END% = [&] (%REPL_BEGIN%parameters%REPL_END%) {\n\t%INSERT%\n};",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Unique pointer",
+        "prefix": "unique_ptr",
+        "language": "cpp",
+        "code": "auto %REPL_BEGIN%item%REPL_END% = std::make_unique<%REPL_BEGIN%Type%REPL_END%>(%INSERT%);",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Vector",
+        "prefix": "vector",
+        "language": "cpp",
+        "code": "std::vector<%REPL_BEGIN%Type%REPL_END%> %REPL_BEGIN%values%REPL_END%;\n%INSERT%",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Structured binding",
+        "prefix": "binding",
+        "language": "cpp",
+        "code": "const auto& [%REPL_BEGIN%key%REPL_END%, %REPL_BEGIN%value%REPL_END%] = %REPL_BEGIN%pair%REPL_END%;",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Scoped enum",
+        "prefix": "enum_class",
+        "language": "cpp",
+        "code": "enum class %REPL_BEGIN%Name%REPL_END% {\n\t%INSERT%\n};",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "Namespace",
+        "prefix": "namespace",
+        "language": "cpp",
+        "code": "namespace %REPL_BEGIN%name%REPL_END% {\n\t%INSERT%\n}",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "C function",
+        "prefix": "c_function",
+        "language": "c",
+        "code": "%REPL_BEGIN%int%REPL_END% %REPL_BEGIN%function%REPL_END%(%REPL_BEGIN%void%REPL_END%) {\n\t%INSERT%\n}",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "C printf",
+        "prefix": "c_printf",
+        "language": "c",
+        "code": "printf(\"%REPL_BEGIN%message%REPL_END%\\n\");\n%INSERT%",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "C struct",
+        "prefix": "c_struct",
+        "language": "c",
+        "code": "typedef struct {\n\t%INSERT%\n} %REPL_BEGIN%Name%REPL_END%;",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "C++ main",
+        "prefix": "cpp_main",
+        "language": "cpp",
+        "code": "#include <iostream>\n\nint main() {\n\t%INSERT%\n\treturn 0;\n}",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    },
+    {
+        "caption": "C main",
+        "prefix": "c_main",
+        "language": "c",
+        "code": "#include <stdio.h>\n\nint main(void) {\n\t%INSERT%\n\treturn 0;\n}",
+        "description": "",
+        "section": 1,
+        "enabled": true
+    }
+]

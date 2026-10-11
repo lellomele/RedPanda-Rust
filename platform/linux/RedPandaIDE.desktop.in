@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Red Panda Rust
+Comment=Rust IDE with Cargo and QSynEdit
+Exec=RedPandaRust %F
+Icon=redpandaide
+Terminal=false
+Type=Application
+Categories=Development;IDE;Qt;
+MimeType=text/x-rust;text/x-toml;
