@@ -1,16 +1,19 @@
 # Verifiche Rust
 
-Le suite esistenti coprono editor e workflow di compilazione descritti sotto. L’integrazione LSP introdotta nella versione 0.2.3 è stata compilata; non sono state eseguite nuove prove funzionali LSP e non è coperta da queste suite.
+Configurare CMake con `BUILD_TESTING=ON`, compilare `all-test-targets` e usare `ctest --output-on-failure`. Le suite funzionali usano progetti e profili temporanei. Richiedono Rust con rust-src, rust-analyzer, rustfmt e Clippy; le prove DAP richiedono CodeLLDB. `REDPANDA_TEST_CODELLDB` indica l'adapter per i test; `REDPANDA_CODELLDB` lo indica per la finestra.
 
-Compilare il target `rust-workflow-checks` con CMake. Richiede Qt Test e una toolchain Cargo funzionante; crea soltanto progetti temporanei senza dipendenze esterne.
+Le suite coprono Cargo e rustc su file singoli, diagnostiche, input/output Unicode, errori e annullamenti, processi figli e limiti di memoria/output; workspace, target, esempi, test, feature, profili, argomenti e ambiente. Le prove LSP usano un server simulato e rust-analyzer reale: testo non salvato, UTF-16, risposte obsolete, chiusura, riapertura, riavvio e messaggi malformati. Il debugger reale verifica stack, passi, variabili, input, memoria, disassemblato, breakpoint avanzati, destinazioni rifiutate e avvio fino al cursore.
 
-La suite copre stato della sintassi (commenti annidati, stringhe raw, lifetime, sorgenti incompleti), Cargo check/build/run/test/clippy/fmt, diagnostiche e percorsi Windows, avvio fallito e ripartenza, input senza newline, interruzione con processi figli e limite di output.
+## Interfaccia
 
-Verifica anche i file Rust singoli con rustc: controllo, compilazione, esecuzione, test, rustfmt, nomi con spazi e accenti, diagnostiche e ripartenza senza eseguire un vecchio binario dopo un errore. Nella prova della finestra vengono attivati i pulsanti Compila, Esegui e Controlla, anche dopo avere aperto un progetto Cargo diverso.
+La build dedicata `REDPANDA_UI_CHECKS=ON` espone `RedPandaRust.exe --rust-ui-test-output <nuova-cartella>`, con profilo isolato. Il controllo usa eventi Qt di mouse e tastiera per margine, Ctrl+F4 e Ctrl+F5; verifica ripristino dei breakpoint da disco, spostamento con le righe, pannello e rifiuto dei sorgenti modificati. Altri controlli coprono build/run/check, preferenze, analisi e refactoring multi-file con anteprima e undo/redo, Git, pulizia Cargo, salvataggi falliti e conservazione del testo. Produce `checks.json` e immagini, poi chiude la finestra.
 
-Per le prove della finestra configurare una build separata con `-DREDPANDA_UI_CHECKS=ON`, poi usare `RedPandaRust.exe --rust-ui-test-output <cartella-temporanea-nuova>`. Viene creato un profilo isolato e un progetto Cargo nella cartella indicata. Il controllo verifica identità, icona, evidenziazione Rust, azioni, UTF-8, salvataggi e conservazione del testo dopo un errore, build, run, format, diagnostiche e ripartenza. Le conferme sono gestite automaticamente soltanto durante questo controllo. Produce `checks.json` e uno screenshot, poi chiude la finestra.
+La regressione `impl` → `implo` viene verificata sul file grande, con tooltip, Ctrl-hover e 100 cicli di apertura/chiusura. Le suite comuni includono editor, recupero, ricerca, impostazioni, sintassi e undo Unicode.
 
-Il pacchetto Windows viene inoltre controllato senza Qt e MinGW nel PATH. La versione Linux non è stata compilata o verificata.
+Eseguire le prove Windows anche nel normale contesto dell'utente. Un ambiente con accesso filesystem limitato può cambiare la risoluzione dei percorsi del debugger e il comportamento dei processi figli; conservare e investigare i risultati differenti.
 
-La suite copre anche salvataggio e rifiuto dei percorsi non validi, uso dell’edizione selezionata e gestione dello stato del lexer incompatibile. Le prove della finestra includono `implo` alla linea 21 del file grande, tooltip e Ctrl-hover, salvataggio delle impostazioni, verifica delle versioni e contenuti della finestra Informazioni.
+## Distribuzione
 
+La build da distribuire usa `REDPANDA_UI_CHECKS=OFF`, non contiene comandi QA e non dipende da Qt Test. Controllare DLL e licenze, ZIP, corrispondenza dei sorgenti, checksum e avvio con le DLL del pacchetto. Rigenerare il report sulla nuova release: i risultati precedenti non certificano il nuovo codice.
+
+Linux è rimandato. Le prove locali non sostituiscono il collaudo su sistemi Windows puliti né l'uso indipendente sul campo; fino a tale validazione mantenere la dicitura beta.

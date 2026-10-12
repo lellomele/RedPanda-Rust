@@ -2,6 +2,8 @@
 
 IDE desktop per Rust derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit. Include compilazione, esecuzione, test, formattazione, analisi semantica, completamento, refactoring, debug e Git.
 
+**1.0.0-beta.1 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
+
 ## Installazione
 
 Su Windows estrarre il pacchetto e avviare **RedPandaRust.exe**. Qt e le librerie dell'interfaccia sono inclusi. Le preferenze portabili e il recupero dei documenti risiedono nella cartella `config` accanto all'eseguibile; conservarla durante gli aggiornamenti.
@@ -21,14 +23,16 @@ Per il debug installare [CodeLLDB 1.12.3](https://github.com/vadimcn/codelldb/re
 - **Opzioni progetto/file:** selezionare profilo Debug/Release, package, target, feature, piattaforma, argomenti, ambiente e cartella di esecuzione. Per un file singolo si applicano le opzioni rustc, profilo, piattaforma e parametri di esecuzione.
 - **Analisi:** rust-analyzer legge anche le modifiche non salvate. **Ctrl+Spazio** apre il completamento; Invio/Tab confermano, Esc chiude, **F12** apre la definizione. Il menu Refactoring offre riferimenti, rinomina con anteprima, azioni Rust ed espansione delle macro; il pannello Struttura mostra i simboli. I suggerimenti sulle chiamate mostrano firma e documentazione.
 - **Snippet e template:** **Ctrl+Alt+Spazio** inserisce uno snippet Rust e Tab passa tra i campi. Le raccolte e il template Rust sono modificabili nelle preferenze dell'editor.
-- **Debug:** impostare breakpoint nel margine e avviare il debug. Il pannello Rust offre thread, stack, variabili, watch, modifica dei valori, input del programma, memoria, disassemblato e comandi LLDB. Sono disponibili passi, continua, pausa, esecuzione fino al cursore, breakpoint condizionali, hit condition, logpoint, breakpoint sulle funzioni e watchpoint sulle variabili supportate dal debugger.
+- **Debug:** impostare breakpoint con un clic nel margine, dal menu contestuale o con **Ctrl+F4**, poi avviare il debug. **Ctrl+F5 / Esegui fino al cursore** avvia la compilazione e il debug fino alla riga selezionata oppure prosegue una sessione ferma; altri breakpoint possono fermare prima il programma. Le righe senza codice eseguibile possono essere spostate dal debugger alla riga utile successiva o rifiutate, con un messaggio. Dopo avere modificato i sorgenti riavviare il debug per ricompilare. Il pannello Rust offre thread, stack, variabili, watch, modifica dei valori, input del programma, memoria, disassemblato e comandi LLDB. Sono disponibili passi, continua, pausa, breakpoint condizionali, hit condition, logpoint, breakpoint sulle funzioni e watchpoint sulle variabili supportate dal debugger.
 - **Git:** configurare Git nelle preferenze Strumenti. Il menu permette repository, staging, commit, branch, merge, cronologia, remoti, fetch, pull e push. Git deve essere installato separatamente.
 
 Le diagnostiche del compilatore sono navigabili nel pannello Problemi; la console accetta input e permette di interrompere i processi. **Progetto Rust → Pulisci artefatti Cargo** mostra la cartella effettiva e sposta gli artefatti nel Cestino dopo conferma; rifiuta cartelle con sorgenti, documenti aperti o collegamenti e cambiamenti successivi all'anteprima. Il recupero periodico si configura nelle preferenze Interfaccia e area di lavoro.
 
+Per il debug passo passo preferire il profilo **Debug**: le ottimizzazioni Release possono eliminare variabili o rendere alcune righe non raggiungibili separatamente.
+
 ## Requisiti e limiti
 
-Windows 10 versione 1809 o successiva, oppure Windows 11, x64; Rust 1.85+ per l'edizione 2024. La distribuzione Windows è verificata con Qt 6.11.2, Rust/rust-analyzer 1.98.0 e CodeLLDB 1.12.3. La compilazione Linux conserva le risorse desktop, ma non è stata verificata per questa distribuzione.
+Windows 10 versione 1809 o successiva, oppure Windows 11, x64; Rust 1.85+ per l'edizione 2024. La distribuzione Windows è verificata con Qt 6.11.2, Rust/rust-analyzer 1.98.0 e CodeLLDB 1.12.3. La versione Linux è rimandata; si conservano architettura multipiattaforma e risorse desktop per una futura ripresa.
 
 L'indicizzazione iniziale può richiedere tempo. Se rust-analyzer si arresta, la IDE effettua tentativi di riavvio limitati; **Strumenti → Riavvia rust-analyzer** consente di riprovare. Sono analizzati fino a 128 documenti, 8 MiB di testo UTF-16 per documento e 64 MiB complessivi; questi limiti non impediscono di aprire o compilare file più grandi. Le diagnostiche del server sono nell'editor; build/check si eseguono esplicitamente.
 

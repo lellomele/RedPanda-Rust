@@ -13,6 +13,10 @@
 #include <QProcess>
 #include <QTimer>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 RustToolsWidget::RustToolsWidget(const QString &name,const QString &group,IconsManager *icons,QWidget *parent)
     :SettingsWidget(name,group,icons,parent){
     auto *layout=new QFormLayout(this);
@@ -49,7 +53,7 @@ RustToolsWidget::RustToolsWidget(const QString &name,const QString &group,IconsM
         mTimeout->stop();mOutput+=mProbe->readAllStandardOutput().left(4096-mOutput.size());
         const QString text=QString::fromUtf8(mOutput).trimmed();
         mResults.value(mCurrent)->setText(mTimedOut?tr("Verifica interrotta: tempo o output eccessivi."):
-            code==0&&status==QProcess::NormalExit?text:tr("Verifica fallita (%1): %2").arg(code).arg(text));
+            code==0&&status==QProcess::NormalExit?(mProbeDescription.isEmpty()?text:mProbeDescription):tr("Verifica fallita (%1): %2").arg(code).arg(text));
         QTimer::singleShot(0,this,&RustToolsWidget::probeNext);
     });
     connect(mVerify,&QPushButton::clicked,this,[this]{mVerify->setEnabled(false);mQueue=RustTools::names();probeNext();});
@@ -57,10 +61,21 @@ RustToolsWidget::RustToolsWidget(const QString &name,const QString &group,IconsM
 RustToolsWidget::~RustToolsWidget(){mTimeout->stop();if(mProbe->state()!=QProcess::NotRunning){disconnect(mProbe,nullptr,this,nullptr);mProbe->kill();mProbe->waitForFinished(500);}}
 void RustToolsWidget::probeNext(){
     if(mQueue.isEmpty()){mVerify->setEnabled(true);return;}
-    mCurrent=mQueue.takeFirst();mOutput.clear();mTimedOut=false;
+    mCurrent=mQueue.takeFirst();mOutput.clear();mTimedOut=false;mProbeDescription.clear();
     QString path=mPaths.value(mCurrent)->text().trimmed();if(path.isEmpty())path=RustTools::detectedPath(mCurrent);
     if(path.isEmpty()){mResults.value(mCurrent)->setText(tr("Non trovato"));QTimer::singleShot(0,this,&RustToolsWidget::probeNext);return;}
-    mResults.value(mCurrent)->setText(tr("Verifica in corso: %1").arg(path));mTimeout->start();mProbe->start(path,{"--version"});
+    QStringList arguments{"--version"};
+    if(mCurrent=="codelldb"){
+        // The adapter's CLI has no --version option. --help verifies that the
+        // adapter loads; its distribution metadata supplies the version.
+        arguments={"--help"};mProbeDescription=tr("Adapter CodeLLDB disponibile: %1").arg(path);
+        QFile metadata(QDir(QFileInfo(path).absolutePath()).filePath("../package.json"));
+        if(metadata.open(QIODevice::ReadOnly)&&metadata.size()<=256*1024){
+            const auto version=QJsonDocument::fromJson(metadata.readAll()).object().value("version").toString();
+            if(!version.isEmpty())mProbeDescription=tr("CodeLLDB %1 — adapter disponibile: %2").arg(version,path);
+        }
+    }
+    mResults.value(mCurrent)->setText(tr("Verifica in corso: %1").arg(path));mTimeout->start();mProbe->start(path,arguments);
 }
 void RustToolsWidget::doLoad(){
     for(const QString &tool:RustTools::names()){

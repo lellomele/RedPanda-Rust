@@ -85,10 +85,41 @@ private slots:
         QVERIFY2(output.contains("DEBUG_RUST 9")&&output.contains(QString::fromUtf8("INPUT ciao città 🦀")),qPrintable(output));
     }
     void runToCursorAndCancellation(){
-        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),done(&session,&RustDebugSession::finished);
+        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),done(&session,&RustDebugSession::finished),replies(&session,&RustDebugSession::reply);
         QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(stops.count(),1,30000);
         session.runTo(mFile,5);QTRY_VERIFY_WITH_TIMEOUT(stops.count()>=2,15000);
+        const auto stack=response(replies,session.request("stackTrace",{{"threadId",session.threadId()},{"levels",1}}));
+        QCOMPARE(stack.value("stackFrames").toArray().first().toObject().value("line").toInt(),6);
         session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,10000);QCOMPARE(session.state(),RustDebugSession::State::Idle);
+    }
+    void launchDirectlyToCursor(){
+        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),done(&session,&RustDebugSession::finished),replies(&session,&RustDebugSession::reply),errors(&session,&RustDebugSession::error);
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),false,mFile,5));
+        QTRY_COMPARE_WITH_TIMEOUT(stops.count(),1,30000);
+        const auto stack=response(replies,session.request("stackTrace",{{"threadId",session.threadId()},{"levels",1}}));
+        QCOMPARE(stack.value("stackFrames").toArray().first().toObject().value("line").toInt(),6);
+        QCOMPARE(errors.count(),0);QVERIFY(session.sendInput("direct-run-to"));session.command("continue");
+        QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);QCOMPARE(stops.count(),1);QCOMPARE(done.first()[0].toInt(),0);
+    }
+    void rejectedRunToPreservesStoppedSession(){
+        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),done(&session,&RustDebugSession::finished),errors(&session,&RustDebugSession::error);
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(stops.count(),1,30000);
+        session.runTo(mTemp.filePath("missing.rs"),1);QCOMPARE(errors.count(),1);QCOMPARE(session.state(),RustDebugSession::State::Stopped);
+        const auto unknown=mTemp.filePath("not-compiled.rs");QFile source(unknown);QVERIFY(source.open(QIODevice::WriteOnly));source.write("fn main(){println!(\"not in binary\");}\n");source.close();
+        session.runTo(unknown,0);QTRY_VERIFY_WITH_TIMEOUT(errors.count()>=2,15000);
+        QTest::qWait(150);QCOMPARE(session.state(),RustDebugSession::State::Stopped);QCOMPARE(stops.count(),1);
+        session.runTo(mFile,5);QTRY_COMPARE_WITH_TIMEOUT(stops.count(),2,15000);
+        session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,10000);
+    }
+    void manyBreakpointUpdatesAreNotDropped(){
+        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),replies(&session,&RustDebugSession::reply),done(&session,&RustDebugSession::finished);
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(stops.count(),1,30000);
+        replies.clear();
+        for(int i=0;i<60;++i)session.setBreakpoints(mTemp.filePath(QString("empty-%1.rs").arg(i)),{});
+        const auto responses=[&]{int count=0;for(const auto &reply:replies)if(reply[1].toString()=="setBreakpoints"&&reply[3].toBool())++count;return count;};
+        QTRY_VERIFY_WITH_TIMEOUT(responses()>=60,15000);
+        session.runTo(mFile,5);QTRY_COMPARE_WITH_TIMEOUT(stops.count(),2,15000);
+        session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,10000);
     }
     void variableEditingAndDataBreakpoint(){
         RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),replies(&session,&RustDebugSession::reply),done(&session,&RustDebugSession::finished);

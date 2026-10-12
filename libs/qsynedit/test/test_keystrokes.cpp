@@ -1,8 +1,20 @@
 #include "test_keystrokes.h"
+#include "qsynedit/qsynedit.h"
 #include "qsynedit/keystrokes.h"
 #include <QTest>
 
 namespace QSynedit {
+void TestKeyStrokes::test_recovery_content_endings_data(){
+    QTest::addColumn<QString>("content");
+    QTest::newRow("empty")<<QString{};
+    QTest::newRow("no-newline")<<QString::fromUtf8("città 🦀");
+    QTest::newRow("LF-final-empty-lines")<<QString::fromUtf8("città 🦀\nseconda\n\n");
+    QTest::newRow("CRLF-final-empty-lines")<<QString::fromUtf8("città 🦀\r\nseconda\r\n\r\n");
+    QTest::newRow("CR-final-empty-lines")<<QString::fromUtf8("città 🦀\rseconda\r\r");
+}
+void TestKeyStrokes::test_recovery_content_endings(){
+    QFETCH(QString,content);QSynEdit editor;editor.setContentPreservingEndings(content);QCOMPARE(editor.text(),content);
+}
 void TestKeyStrokes::test_key_sequence_data()
 {
     QTest::addColumn<Qt::KeyboardModifiers>("modifiers");

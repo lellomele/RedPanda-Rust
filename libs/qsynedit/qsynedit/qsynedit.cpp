@@ -40,6 +40,7 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QTextEdit>
+#include <QRegularExpression>
 #include <QMimeData>
 
 #define UPDATE_HORIZONTAL_SCROLLBAR_EVENT ((QEvent::Type)(QEvent::User+1))
@@ -1032,6 +1033,15 @@ void QSynEdit::setContent(const QStringList &text)
     emit linesDeleted(0, oldCount);
     emit linesInserted(0, mDocument->count());
     endEditing();
+}
+
+void QSynEdit::setContentPreservingEndings(const QString &text)
+{
+    const QRegularExpression endings("\\r\\n|\\r|\\n");
+    const auto ending=endings.match(text);
+    if(ending.hasMatch())mDocument->setNewlineType(ending.captured()=="\r\n"?NewlineType::Windows:ending.captured()=="\r"?NewlineType::MacOld:NewlineType::Unix);
+    setContent(text.split(endings,Qt::KeepEmptyParts));
+    mDocument->setAppendNewLineAtEOF(false);
 }
 
 void QSynEdit::collapseAll()

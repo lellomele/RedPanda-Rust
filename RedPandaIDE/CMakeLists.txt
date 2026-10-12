@@ -242,6 +242,9 @@ target_link_libraries(RedPandaIDE PRIVATE
     Qt::Xml
     qsynedit
     redpanda_qt_utils)
+if(REDPANDA_UI_CHECKS)
+    target_link_libraries(RedPandaIDE PRIVATE Qt::Test)
+endif()
 
 #target_link_options(RedPandaIDE PRIVATE
 #    $<$<CONFIG:Release>:-s -static>

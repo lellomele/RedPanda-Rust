@@ -77,8 +77,11 @@ void SessionRecovery::restorePreviousSessions() {
                 const QString name = QString("recovered-%1-%2").arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8), QFileInfo(document.filename).fileName());
                 auto *editor = mWindow->editorManager()->newEditor(name, ENCODING_UTF8, FileType::None, document.filename, false, true);
                 if (!editor) { complete = false; break; }
-                editor->setContent(document.text); editor->setModified(true);
+                // setContent(QString) discards a final empty line. Recovery
+                // must preserve every line of the stored buffer instead.
+                editor->setContentPreservingEndings(document.text);editor->setModified(true);
                 editor->setCaretXY({document.column, document.line});
+                mWindow->editorManager()->activeEditor(editor,true);
             } catch (const BaseError &error) { complete = false; QMessageBox::warning(mWindow, tr("Recovery error"), error.reason()); break; }
         }
         if (complete) mConsumed.append(path);

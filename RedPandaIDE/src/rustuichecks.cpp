@@ -17,7 +17,10 @@
 #include "widgets/aboutdialog.h"
 #include "settingsdialog/settingsdialog.h"
 #include "sessionrecovery.h"
+#include "sessionstore.h"
 #include "settings.h"
+#include "debugger/debugger.h"
+#include "debugger/debuggermodels.h"
 #ifdef ENABLE_VCS
 #include "vcs/gitmanager.h"
 #endif
@@ -47,6 +50,9 @@
 #include <QDialogButtonBox>
 #include <QInputDialog>
 #include <QHeaderView>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QtTest>
 #include <qsynedit/syntaxer/rust.h>
 
 int MainWindow::runRustUiChecks(const QString &outputDir){
@@ -269,7 +275,45 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             QElapsedTimer elapsed;elapsed.start();while(!predicate()&&elapsed.elapsed()<timeout){QEventLoop loop;QTimer::singleShot(30,&loop,&QEventLoop::quit);loop.exec();}return predicate();
         };
         if(debugEditor){
-            debugEditor->toggleBreakpoint(3);mRustDebugPanel->addWatch("total");
+            debugEditor->setCaretXY({0,3});debugEditor->setFocus();QApplication::processEvents();
+            const auto gutterPoint=[&](int line){const auto pixel=debugEditor->displayCoordToPixels(debugEditor->bufferToDisplayPos({0,line}));return QPoint(qMax(2,debugEditor->gutterWidth()/2),pixel.y()+debugEditor->textHeight()/2);};
+            QTest::mouseClick(debugEditor->viewport(),Qt::LeftButton,Qt::NoModifier,gutterPoint(3));
+            check("Rust breakpoint by gutter mouse click",debugEditor->hasBreakpoint(3));
+            QApplication::setActiveWindow(this);mEditorManager->activeEditor(debugEditor,true);debugEditor->setCaretXY({0,3});debugEditor->setFocus();QApplication::processEvents();
+            QTest::keyClick(debugEditor,Qt::Key_F4,Qt::ControlModifier);
+            check("Rust breakpoint removal by keyboard",!debugEditor->hasBreakpoint(3));
+            QTest::keyClick(debugEditor,Qt::Key_F4,Qt::ControlModifier);
+            check("Rust breakpoint insertion by keyboard",debugEditor->hasBreakpoint(3));
+            debugEditor->toggleBreakpoint(-1);debugEditor->toggleBreakpoint(debugEditor->lineCount());
+            check("Invalid breakpoint rows ignored",!debugEditor->hasBreakpoint(-1)&&!debugEditor->hasBreakpoint(debugEditor->lineCount()));
+            debugEditor->setCaretXY({0,0});debugEditor->setSelText("// inserted before breakpoint\n");
+            check("Breakpoint follows inserted line",debugEditor->hasBreakpoint(4)&&!debugEditor->hasBreakpoint(3));
+            debugEditor->undo();check("Breakpoint follows undo",debugEditor->hasBreakpoint(3));
+            check("Breakpoint model rejects invalid row",!mDebugger->breakpointModel()->breakpoint(-1,false)&&!mDebugger->breakpointModel()->breakpoint(999999,false));
+            const auto bpFile=outputDir+"/breakpoints.json";mDebugger->saveForNonproject(bpFile);
+            check("Breakpoint persistence file written",QFileInfo::exists(bpFile));debugEditor->clearBreakpoints();
+            mDebugger->loadForNonproject(bpFile);mEditorManager->updateEditorBreakpoints();
+            check("Breakpoint restored from disk",debugEditor->hasBreakpoint(3));
+            debugEditor->clearBreakpoints();mDebugger->saveForNonproject(bpFile);mDebugger->loadForNonproject(bpFile);mEditorManager->updateEditorBreakpoints();
+            check("Deleted breakpoint stays deleted after save and reload",!debugEditor->hasBreakpoint(3));
+            QTest::mouseClick(debugEditor->viewport(),Qt::LeftButton,Qt::NoModifier,gutterPoint(3));
+            const auto corrupt=outputDir+"/corrupt-debug.json";put(corrupt,"{invalid");bool repaired=false;
+            try{mDebugger->saveForNonproject(corrupt);QFile config(corrupt);repaired=config.open(QIODevice::ReadOnly)&&QJsonDocument::fromJson(config.readAll()).object().value("breakpoints").isArray();}catch(const FileError &){}
+            check("Corrupt debugger settings do not crash atomic save",repaired&&debugEditor->hasBreakpoint(3));
+            bool contextSeen=false;QTimer contextCloser;contextCloser.setInterval(20);
+            connect(&contextCloser,&QTimer::timeout,this,[&]{if(auto menu=qobject_cast<QMenu *>(QApplication::activePopupWidget())){
+                contextSeen=menu->actions().contains(ui->actionToggle_Breakpoint)&&menu->actions().contains(ui->actionRun_To_Cursor);
+                menu->close();}});
+            const QPoint contextPoint(debugEditor->gutterWidth()+20,gutterPoint(3).y());QCursor::setPos(debugEditor->viewport()->mapToGlobal(contextPoint));
+            contextCloser.start();QContextMenuEvent contextEvent(QContextMenuEvent::Mouse,contextPoint,debugEditor->viewport()->mapToGlobal(contextPoint));
+            QApplication::sendEvent(debugEditor->viewport(),&contextEvent);contextCloser.stop();
+            check("Rust editor context menu offers breakpoint and run to cursor",contextSeen);
+            bool sourceListSeen=false;QTimer listCloser;listCloser.setInterval(20);
+            connect(&listCloser,&QTimer::timeout,this,[&]{for(auto widget:QApplication::topLevelWidgets())if(auto dialog=qobject_cast<QDialog *>(widget))if(dialog->objectName()=="rustSourceBreakpointDialog"){
+                auto table=dialog->findChild<QTableView *>("rustSourceBreakpointTable");sourceListSeen=table&&table->model()->rowCount()>0;dialog->grab().save(outputDir+"/source-breakpoints.png");dialog->reject();}});
+            listCloser.start();if(auto button=mRustDebugPanel->findChild<QPushButton *>("rustSourceBreakpoints"))button->click();listCloser.stop();
+            check("Rust source breakpoint list accessible",sourceListSeen);
+            check("Save debug source",debugEditor->save());mRustDebugPanel->addWatch("total");
             check("Debug button enabled",ui->actionDebug->isEnabled());ui->actionDebug->trigger();
             const bool paused=waitFor([this]{return mRustDebugger->state()==RustDebugSession::State::Stopped;},45000);
             check("GUI debug breakpoint",paused);
@@ -286,8 +330,10 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
                 if(total)variables->itemDoubleClicked(total,1);editValue.stop();
                 check("GUI debug variable editing",waitFor([&]{if(!watches)return false;for(auto item:watches->findItems("total",Qt::MatchExactly,0))if(item->text(1)=="11")return true;return false;},10000));
                 int subsequentStops=0;auto stoppedConnection=connect(mRustDebugger,&RustDebugSession::stopped,this,[&]{++subsequentStops;});
-                debugEditor->toggleBreakpoint(3);debugEditor->setCaretXY({0,5});ui->actionRun_To_Cursor->trigger();
+                QTest::mouseClick(debugEditor->viewport(),Qt::LeftButton,Qt::NoModifier,gutterPoint(3));
+                debugEditor->setCaretXY({0,5});debugEditor->setFocus();QTest::keyClick(debugEditor,Qt::Key_F5,Qt::ControlModifier);
                 check("GUI debug run to cursor",waitFor([this,&subsequentStops]{return subsequentStops>0&&mRustDebugger->state()==RustDebugSession::State::Stopped;},15000));disconnect(stoppedConnection);
+                check("Run to cursor reaches requested source row",debugEditor->caretY()==5);
                 const bool collection=waitFor([&]{return variables&&!variables->findItems("values",Qt::MatchExactly|Qt::MatchRecursive,0).isEmpty();},10000);
                 auto values=collection?variables->findItems("values",Qt::MatchExactly|Qt::MatchRecursive,0).value(0):nullptr;if(values)values->setExpanded(true);
                 check("GUI first variable page",values&&waitFor([&]{return values->childCount()==201;},10000));
@@ -306,6 +352,17 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
                 check("GUI debug program input output",console&&console->toPlainText().contains("DEBUG_UI 11")&&console->toPlainText().contains(QString::fromUtf8("INPUT_UI città 🦀")));
             }
             if(mRustDebugger->active()){mRustDebugger->stop();waitFor([this]{return !mRustDebugger->active();},10000);}
+            debugEditor->setCaretXY({0,3});debugEditor->setFocus();QApplication::processEvents();
+            check("Run to cursor enabled before starting debug",ui->actionRun_To_Cursor->isEnabled());
+            QTest::keyClick(debugEditor,Qt::Key_F5,Qt::ControlModifier);
+            check("Run to cursor starts a debug session",waitFor([this]{return mRustDebugger->state()==RustDebugSession::State::Stopped;},45000));
+            check("Direct run to cursor selects requested row",waitFor([&]{return debugEditor->caretY()==3;},10000));
+            debugEditor->setCaretXY({0,0});debugEditor->setSelText("// modified during debug\n");
+            ui->actionRun_To_Cursor->trigger();QApplication::processEvents();
+            check("Run to cursor rejects changed source",mRustDebugger->state()==RustDebugSession::State::Stopped&&statusBar()->currentMessage().contains("testo"));
+            debugEditor->undo();ui->actionStop_Execution->trigger();
+            check("Debug stop action returns to idle",waitFor([this]{return mRustDebugger->state()==RustDebugSession::State::Idle;},10000));
+            debugEditor->setModified(false);
             mEditorManager->closeEditor(debugEditor,true,true);
         }else check("Debug editor",false);
     }
@@ -396,10 +453,34 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             check("Asynchronous tool verification",verify->isEnabled());
             auto status=options->findChild<QLabel *>("rustToolStatus_rustc");
             check("Rustc version visible",status&&status->text().contains("rustc"));
+            auto adapterStatus=options->findChild<QLabel *>("rustToolStatus_codelldb");
+            check("CodeLLDB adapter verification uses supported CLI",adapterStatus&&adapterStatus->text().contains("CodeLLDB")&&!adapterStatus->text().contains("fallita"));
         }
         check("Tools screenshot",options->grab().save(outputDir+"/tools.png"));options->close();
     }
+    {
+        const auto original=outputDir+"/recovery-original.rs";const QByteArray originalBytes="fn main(){println!(\"ORIGINAL_ON_DISK\");}\n";
+        const QString recoveredText=QString::fromUtf8("fn main(){println!(\"unsaved città 🦀\");}\n");
+        check("Recovery original fixture",put(original,originalBytes));
+        const auto directory=QDir(pSettings->dirs().config()).filePath("recovery");QDir().mkpath(directory);QString error;
+        check("Abandoned Rust snapshot fixture",SessionStore::write(directory+"/qa-abandoned.json",{{original,recoveredText,0,4}},error));
+        auto recovery=findChild<SessionRecovery *>();const int before=mEditorManager->pageCount();
+        const bool enabled=pSettings->environment().recoveryEnabled();pSettings->environment().setRecoveryEnabled(true);
+        if(recovery)recovery->restorePreviousSessions();
+        check("Recovery dialog restores an abandoned document",recovery&&mEditorManager->pageCount()==before+1);
+        auto restored=mEditorManager->getEditor();
+        check("Recovered Rust text remains unsaved",restored&&restored->modified()&&restored->isNew()&&restored->text()==recoveredText);
+        check("Recovered document retains Rust syntax",restored&&restored->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust);
+        QFile originalFile(original);check("Recovery preserves original file",originalFile.open(QIODevice::ReadOnly)&&originalFile.readAll()==originalBytes);
+        originalFile.close();if(restored&&mEditorManager->pageCount()>before)mEditorManager->closeEditor(restored,true,true);
+        pSettings->environment().setRecoveryEnabled(enabled);
+    }
     resize(1250,800);QApplication::processEvents();check("Screenshot",grab().save(outputDir+"/red-panda-rust.png"));
+    // Every document belongs to the isolated QA profile. A failed check must
+    // still close the test run instead of waiting on an invisible save prompt.
+    for(int remaining=mEditorManager->pageCount();remaining>0;--remaining){
+        auto document=(*mEditorManager)[0];if(!mEditorManager->closeEditor(document,true,true))break;
+    }
     QSaveFile report(outputDir+"/checks.json");
     if(report.open(QIODevice::WriteOnly)){report.write(QJsonDocument(QJsonObject{{"checks",checks},{"failures",failed}}).toJson());if(!report.commit())++failed;}else ++failed;
     return failed?1:0;

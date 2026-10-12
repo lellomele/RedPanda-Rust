@@ -209,8 +209,10 @@ void BreakpointModel::invalidateAllBreakpointNumbers()
 
 PBreakpoint BreakpointModel::setBreakPointCondition(int index, const QString &condition,bool forProject)
 {
-    PBreakpoint breakpoint = breakpoints(forProject)[index];
+    PBreakpoint breakpoint = this->breakpoint(index,forProject);
+    if(!breakpoint)return {};
     breakpoint->condition = condition;
+    breakpoint->timestamp = QDateTime::currentMSecsSinceEpoch();
     if (forProject==mIsForProject)
         emit dataChanged(createIndex(index,0),createIndex(index,2));
     return breakpoint;
@@ -219,7 +221,7 @@ PBreakpoint BreakpointModel::setBreakPointCondition(int index, const QString &co
 PBreakpoint BreakpointModel::breakpoint(int index, bool forProject) const
 {
     const QList<PBreakpoint> list=breakpoints(forProject);
-    if (index<0 && index>=list.count())
+    if (index<0 || index>=list.count())
         return PBreakpoint();
     return list[index];
 }
@@ -244,6 +246,7 @@ void BreakpointModel::onFileDeleteLines(const QString& filename, int startLine, 
              && breakpoint->line>=startLine) {
             if (breakpoint->line >= startLine+count) {
                 breakpoint->line -= count;
+                breakpoint->timestamp = QDateTime::currentMSecsSinceEpoch();
                 if (forProject==mIsForProject)
                     emit dataChanged(createIndex(i,0),createIndex(i,2));
             } else {
@@ -261,6 +264,7 @@ void BreakpointModel::onFileInsertLines(const QString& filename, int startLine, 
         if  (breakpoint->filename == filename
              && breakpoint->line>=startLine) {
             breakpoint->line+=count;
+            breakpoint->timestamp = QDateTime::currentMSecsSinceEpoch();
             if (forProject == mIsForProject)
                 emit dataChanged(createIndex(i,0),createIndex(i,2));
         }
@@ -290,6 +294,7 @@ void BreakpointModel::onFileLineMoved(const QString &filename, int fromLine, int
                }
            }
         }
+        if(changed)breakpoint->timestamp = QDateTime::currentMSecsSinceEpoch();
         if (changed && forProject == mIsForProject)
             emit dataChanged(createIndex(i,0),createIndex(i,2));
     }

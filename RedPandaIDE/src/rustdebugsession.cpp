@@ -48,8 +48,12 @@ RustDebugSession::RustDebugSession(QObject *parent):QObject(parent),mTerminal(th
             if(!mPending.contains(id)||mPending[id].deadline>mClock.elapsed())continue;
             const auto pending=mPending.take(id);
             emit reply(id,pending.command,{},false,tr("Richiesta debugger scaduta."));
-            if(pending.command=="initialize"||pending.command=="launch"||pending.configuration){terminate(tr("Configurazione del debugger scaduta."));return;}
+            if(id==mRunToRequest){clearRunTo();emit error(tr("Esecuzione fino al cursore scaduta; il programma resta in pausa."));}
+            if(pending.command=="initialize"||pending.command=="launch"||pending.command=="configurationDone"||pending.configuration){terminate(tr("Configurazione del debugger scaduta."));return;}
+            if(QSet<QString>{"continue","next","stepIn","stepOut","pause"}.contains(pending.command)){terminate(tr("Il debugger non ha confermato il comando; sessione interrotta per evitare uno stato incoerente."));return;}
+            if(pending.command=="setBreakpoints")emit error(tr("Aggiornamento dei breakpoint scaduto; verifica il collegamento al debugger."));
         }
+        pumpBreakpointUpdates();
     });
 }
 RustDebugSession::~RustDebugSession(){
@@ -84,14 +88,18 @@ void RustDebugSession::releaseJob(){
     if(mJob){CloseHandle(mJob);mJob=nullptr;}mAttributes.clear();
 #endif
 }
-bool RustDebugSession::launch(const QString &program,const QString &directory,const QStringList &args,const QProcessEnvironment &environment,bool stopOnEntry){
+bool RustDebugSession::launch(const QString &program,const QString &directory,const QStringList &args,const QProcessEnvironment &environment,bool stopOnEntry,const QString &runToFile,int runToLine){
     if(active()||mTerminal.active()||mAdapter.state()!=QProcess::NotRunning)return false;
     if(!QFileInfo(program).isExecutable()||!QFileInfo(directory).isDir()){emit error(tr("Programma o cartella di debug non validi."));return false;}
     mAdapterPath=RustTools::effectivePath("codelldb");
     if(mAdapterPath.isEmpty()||!QFileInfo(mAdapterPath).isExecutable()){emit error(tr("CodeLLDB non trovato. Configuralo in Rust → Strumenti del compilatore."));return false;}
     mProgram=QFileInfo(program).absoluteFilePath();mDirectory=QFileInfo(directory).absoluteFilePath();mArguments=args;mEnvironment=environment;mStopOnEntry=stopOnEntry;
     mInput.clear();mPending.clear();mExpected=-1;mAuthenticated=false;mConfigured=false;mCapabilities={};mConfigurationPending=0;mReverseTerminal=0;mThread=0;mExitCode=-1;++mGeneration;
-    mRunToFile.clear();mRunToRequest=0;mConfigurationFiles.clear();
+    mRunToFile.clear();mRunToRequest=0;mConfigurationFiles.clear();mDirtyBreakpointFiles.clear();
+    if(!runToFile.isEmpty()){
+        if(runToLine<0||!QFileInfo(runToFile).isFile()){emit error(tr("Sorgente o riga di destinazione non validi."));return false;}
+        mRunToFile=QFileInfo(runToFile).absoluteFilePath();mRunToLine=runToLine+1;mStopOnEntry=false;
+    }
     mToken=QUuid::createUuid().toString(QUuid::WithoutBraces);
     if(!mServer.listen(QHostAddress::LocalHost,0)){emit error(tr("Impossibile avviare il collegamento locale al debugger."));return false;}
     releaseJob();if(!prepareJob()){mServer.close();emit error(tr("Impossibile proteggere i processi del debugger."));return false;}
@@ -201,7 +209,7 @@ void RustDebugSession::handle(const QJsonObject &message){
         if(name=="initialized")configure();
         else if(name=="stopped"){
             ++mGeneration;mThread=body.value("threadId").toInt();setState(State::Stopped);
-            if(!mRunToFile.isEmpty()){const auto file=mRunToFile;mRunToFile.clear();mRunToRequest=0;setBreakpoints(file,mBreakpoints.value(file));}
+            clearRunTo();
             emit stopped(mThread,body.value("reason").toString());
         }
         else if(name=="continued"){++mGeneration;setState(State::Running);}
@@ -225,12 +233,32 @@ void RustDebugSession::handle(const QJsonObject &message){
         if(!success){terminate(tr("Avvio del programma fallito: %1").arg(failureMessage));return;}
         if(mState==State::Starting)setState(State::Running);
     }
+    if(pending.command=="configurationDone"&&!success){terminate(tr("Configurazione del debugger fallita: %1").arg(failureMessage));return;}
+    if(!success&&QSet<QString>{"continue","next","stepIn","stepOut"}.contains(pending.command)&&pending.generation==mGeneration){
+        setState(State::Stopped);emit error(tr("Comando debugger rifiutato: %1").arg(failureMessage));emit stopped(mThread,"command-failed");
+    }
+    if(!success&&pending.command=="pause")emit error(tr("Il debugger non può interrompere il programma: %1").arg(failureMessage));
+    if(id==mRunToRequest){
+        const auto breakpoints=body.value("breakpoints").toArray();
+        const auto target=breakpoints.isEmpty()?QJsonObject{}:breakpoints.last().toObject();
+        mRunToRequest=0;
+        if(!success||!target.value("verified").toBool()){
+            const auto message=target.value("message").toString(failureMessage);
+            clearRunTo();
+            emit error(tr("Impossibile eseguire fino al cursore: %1").arg(message.isEmpty()?tr("la riga non corrisponde a codice eseguibile"):message));
+            if(pending.configuration){terminate();return;}
+        }else{
+            const auto line=target.value("line").toInt(mRunToLine);
+            if(line!=mRunToLine)emit output(tr("Il debugger ha spostato la destinazione dalla riga %1 alla riga eseguibile %2.\n").arg(mRunToLine).arg(line));
+            if(!pending.configuration)this->command("continue");
+        }
+    }
     if(pending.configuration){
         if(!success){terminate(tr("Configurazione dei breakpoint fallita: %1").arg(failureMessage));return;}
         --mConfigurationPending;pumpConfiguration();
     }
-    if(id==mRunToRequest){mRunToRequest=0;if(success)this->command("continue");else emit error(tr("Impossibile eseguire fino al cursore: %1").arg(failureMessage));}
     static const QSet<QString> queries{"stackTrace","scopes","variables","evaluate","disassemble","readMemory","threads","dataBreakpointInfo"};
+    pumpBreakpointUpdates();
     if(queries.contains(pending.command)&&pending.generation!=mGeneration)return;
     if(pending.command=="setBreakpoints"||pending.command=="setFunctionBreakpoints"){
         if(!success)emit error(tr("Breakpoint: %1").arg(failureMessage));
@@ -243,6 +271,7 @@ void RustDebugSession::handle(const QJsonObject &message){
 void RustDebugSession::configure(){
     if(mConfigured)return;mConfigured=true;mConfigurationPending=0;
     mConfigurationFiles=mBreakpoints.keys();mConfigurationFiles.sort();
+    if(!mRunToFile.isEmpty()&&!mConfigurationFiles.contains(mRunToFile))mConfigurationFiles.append(mRunToFile);
     request("setExceptionBreakpoints",{{"filters",QJsonArray{"rust_panic"}}});
     if(mCapabilities.value("supportsFunctionBreakpoints").toBool()){
         const int id=request("setFunctionBreakpoints",{{"breakpoints",mFunctionBreakpoints}});
@@ -252,7 +281,8 @@ void RustDebugSession::configure(){
 }
 void RustDebugSession::pumpConfiguration(){
     while(!mConfigurationFiles.isEmpty()&&mPending.size()<28){
-        const auto file=mConfigurationFiles.takeFirst();const int id=request("setBreakpoints",{{"source",QJsonObject{{"path",file}}},{"breakpoints",mBreakpoints.value(file)}});
+        const auto file=mConfigurationFiles.takeFirst();const int id=request("setBreakpoints",{{"source",QJsonObject{{"path",file}}},{"breakpoints",effectiveBreakpoints(file)}});
+        if(file==mRunToFile)mRunToRequest=id;
         if(id){mPending[id].configuration=true;++mConfigurationPending;}else{terminate(tr("Impossibile configurare i breakpoint."));return;}
     }
     if(mConfigurationFiles.isEmpty()&&!mConfigurationPending)finishConfiguration();
@@ -260,7 +290,15 @@ void RustDebugSession::pumpConfiguration(){
 void RustDebugSession::finishConfiguration(){request("configurationDone");}
 void RustDebugSession::setBreakpoints(const QString &file,const QJsonArray &values){
     const auto path=QFileInfo(file).absoluteFilePath();mBreakpoints.insert(path,values);
-    if(active()&&mConfigured&&mState!=State::Stopping)request("setBreakpoints",{{"source",QJsonObject{{"path",path}}},{"breakpoints",values}});
+    if(active()&&mConfigured&&mState!=State::Stopping){mDirtyBreakpointFiles.insert(path);pumpBreakpointUpdates();}
+}
+void RustDebugSession::pumpBreakpointUpdates(){
+    if(!mConfigured||(mState!=State::Running&&mState!=State::Stopped))return;
+    while(!mDirtyBreakpointFiles.isEmpty()&&mPending.size()<24){
+        const auto file=*mDirtyBreakpointFiles.begin();
+        if(!request("setBreakpoints",{{"source",QJsonObject{{"path",file}}},{"breakpoints",effectiveBreakpoints(file)}}))return;
+        mDirtyBreakpointFiles.remove(file);
+    }
 }
 void RustDebugSession::setFunctionBreakpoints(const QJsonArray &values){
     mFunctionBreakpoints=values;
@@ -271,14 +309,27 @@ void RustDebugSession::command(const QString &command){
     if(command=="pause"&&mState==State::Running){request(command,{{"threadId",mThread}});return;}
     if(mState!=State::Stopped)return;
     if(QSet<QString>{"continue","next","stepIn","stepOut"}.contains(command)){
-        ++mGeneration;request(command,{{"threadId",mThread}});setState(State::Running);
+        ++mGeneration;
+        if(request(command,{{"threadId",mThread}}))setState(State::Running);
+        else emit error(tr("Il debugger non può accettare il comando; il programma resta in pausa."));
     }
 }
 void RustDebugSession::runTo(const QString &file,int zeroBasedLine){
-    if(mState!=State::Stopped||zeroBasedLine<0)return;
+    if(mState!=State::Stopped||zeroBasedLine<0||mRunToRequest)return;
+    if(!QFileInfo(file).isFile()){emit error(tr("Il sorgente di destinazione non esiste."));return;}
     mRunToFile=QFileInfo(file).absoluteFilePath();mRunToLine=zeroBasedLine+1;
-    auto values=mBreakpoints.value(mRunToFile);values.append(QJsonObject{{"line",mRunToLine}});
-    mRunToRequest=request("setBreakpoints",{{"source",QJsonObject{{"path",mRunToFile}}},{"breakpoints",values}});
+    mRunToRequest=request("setBreakpoints",{{"source",QJsonObject{{"path",mRunToFile}}},{"breakpoints",effectiveBreakpoints(mRunToFile)}});
+    if(!mRunToRequest){clearRunTo();emit error(tr("Il debugger non può accettare la destinazione; riprova quando termina la richiesta corrente."));}
+}
+QJsonArray RustDebugSession::effectiveBreakpoints(const QString &file)const{
+    auto values=mBreakpoints.value(file);
+    if(file==mRunToFile)values.append(QJsonObject{{"line",mRunToLine}});
+    return values;
+}
+void RustDebugSession::clearRunTo(){
+    if(mRunToFile.isEmpty())return;
+    const auto file=mRunToFile;mRunToFile.clear();mRunToRequest=0;mRunToLine=0;
+    setBreakpoints(file,mBreakpoints.value(file));
 }
 bool RustDebugSession::sendInput(const QString &text){return active()&&mTerminal.write((text+'\r').toUtf8());}
 void RustDebugSession::stop(){
@@ -294,5 +345,5 @@ void RustDebugSession::complete(){
     if(mCompleting||mState==State::Idle)return;mCompleting=true;
     mForceStop.stop();mParse.stop();mServer.close();mPending.clear();mReverseTerminal=0;mTerminal.stop();
     if(mSocket){disconnect(mSocket,nullptr,this,nullptr);mSocket->abort();mSocket->deleteLater();mSocket=nullptr;}
-    mInput.clear();mExpected=-1;releaseJob();setState(State::Idle);emit finished(mExitCode);mCompleting=false;
+    mInput.clear();mExpected=-1;mRunToFile.clear();mRunToRequest=0;mDirtyBreakpointFiles.clear();releaseJob();setState(State::Idle);emit finished(mExitCode);mCompleting=false;
 }

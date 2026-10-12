@@ -12,6 +12,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHash>
+#include <QSet>
 #include "rustterminal.h"
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -23,7 +24,8 @@ public:
     explicit RustDebugSession(QObject *parent=nullptr);
     ~RustDebugSession();
     bool launch(const QString &program,const QString &directory,const QStringList &args={},
-        const QProcessEnvironment &env=QProcessEnvironment::systemEnvironment(),bool stopOnEntry=false);
+        const QProcessEnvironment &env=QProcessEnvironment::systemEnvironment(),bool stopOnEntry=false,
+        const QString &runToFile={},int runToLine=-1);
     void stop();
     State state()const{return mState;}
     bool active()const{return mState!=State::Idle;}
@@ -58,6 +60,9 @@ private:
     void terminate(const QString &message={});
     void setState(State state);
     void complete();
+    QJsonArray effectiveBreakpoints(const QString &file) const;
+    void clearRunTo();
+    void pumpBreakpointUpdates();
     bool prepareJob();
     void releaseJob();
     QTcpServer mServer;
@@ -68,6 +73,7 @@ private:
     QElapsedTimer mClock;
     QHash<int,Pending> mPending;
     QHash<QString,QJsonArray> mBreakpoints;
+    QSet<QString> mDirtyBreakpointFiles;
     QJsonArray mFunctionBreakpoints;
     QByteArray mInput;
     QString mToken,mProgram,mDirectory,mAdapterPath;

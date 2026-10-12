@@ -5322,7 +5322,7 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
     if (!editor)
         return;
     FileType fileType=editor->fileType();
-    bool canDebug = isC_CPP_ASMSourceFile(fileType);
+    bool canDebug = isC_CPP_ASMSourceFile(fileType) || fileType == FileType::RustSource;
     QMenu menu(this);
     QSynedit::CharPos p;
     int line;
@@ -5337,6 +5337,7 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
         if (canDebug) {
             menu.addAction(ui->actionRun);
             menu.addAction(ui->actionDebug);
+            menu.addAction(ui->actionRun_To_Cursor);
             menu.addSeparator();
         }
         if (editor->parser() && editor->parser()->enabled()) {
@@ -5378,6 +5379,8 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
         if (!editor->getLineOfMouse(line))
             line=-1;
         if (canDebug) {
+            if(line>=0)editor->setCaretXY({0,line});
+            menu.addAction(ui->actionRun_To_Cursor);
             menu.addAction(ui->actionToggle_Breakpoint);
             menu.addAction(ui->actionBreakpoint_property);
             menu.addAction(ui->actionClear_all_breakpoints);
@@ -6796,7 +6799,20 @@ void MainWindow::on_actionStep_Out_triggered()
 
 void MainWindow::on_actionRun_To_Cursor_triggered()
 {
-    if(mRustDebugger){if(auto editor=mEditorManager->getEditor())mRustDebugger->runTo(editor->filename(),editor->caretY());return;}
+    if(mRustDebugger){
+        auto editor=mEditorManager->getEditor();
+        if(!editor||editor->fileType()!=FileType::RustSource||editor->isNew())return;
+        if(mRustDebugger->state()==RustDebugSession::State::Idle)
+            startRustDebug(editor->filename(),editor->caretY());
+        else if(mRustDebugger->state()==RustDebugSession::State::Stopped){
+            if(editor->modified()){
+                statusBar()->showMessage(tr("Salva il sorgente e riavvia il debug prima di eseguire fino al cursore: il testo è cambiato rispetto all'eseguibile."),12000);
+                return;
+            }
+            mRustDebugger->runTo(editor->filename(),editor->caretY());
+        }
+        return;
+    }
     if (mDebugger->executing()) {
         Editor *e=mEditorManager->getEditor();
         if (e!=nullptr) {

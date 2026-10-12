@@ -93,6 +93,7 @@ if (${QT_VERSION_MAJOR} LESS 6)
 endif()
 
 # read version from "version.json"
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/version.json")
 file(READ version.json VERSION_JSON)
 string(JSON APP_VERSION_MAJOR GET ${VERSION_JSON} major)
 string(JSON APP_VERSION_MINOR GET ${VERSION_JSON} minor)

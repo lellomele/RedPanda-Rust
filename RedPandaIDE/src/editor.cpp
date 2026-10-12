@@ -1804,7 +1804,7 @@ void Editor::onGutterClicked(Qt::MouseButton button, int , int , int line)
 {
     if (button == Qt::LeftButton) {
         if (isC_CPP_ASMSourceFile(mFileType)
-                || isC_CPPHeaderFile(mFileType))
+                || isC_CPPHeaderFile(mFileType) || mFileType == FileType::RustSource)
             toggleBreakpoint(line);
     }
 }
@@ -5300,6 +5300,8 @@ void Editor::tab()
 
 void Editor::toggleBreakpoint(int line)
 {
+    if (line < 0 || line >= lineCount())
+        return;
     if (hasBreakpoint(line)) {
         mBreakpointLines.remove(line);
         emit breakpointRemoved(this, line);

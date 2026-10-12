@@ -29,6 +29,8 @@ RustDebugPanel::RustDebugPanel(RustDebugSession *session,const QString &settings
     auto refreshButton=new QPushButton(tr("Aggiorna"),this);tools->addWidget(new QLabel(tr("Thread:"),this));tools->addWidget(mThreads,1);tools->addWidget(refreshButton);tools->addWidget(mMemory);tools->addWidget(mAssembly);layout->addLayout(tools);
     mDataBreakpoint=new QPushButton(tr("Watchpoint"),this);mDataBreakpoint->setObjectName("rustDataBreakpoint");tools->addWidget(mDataBreakpoint);
     mFunctions=new QPushButton(tr("Breakpoint funzioni…"),this);mFunctions->setObjectName("rustFunctionBreakpoints");tools->addWidget(mFunctions);
+    auto sources=new QPushButton(tr("Breakpoint sorgenti…"),this);sources->setObjectName("rustSourceBreakpoints");tools->addWidget(sources);
+    connect(sources,&QPushButton::clicked,this,&RustDebugPanel::sourceBreakpointsRequested);
     auto splitter=new QSplitter(this);mStack=new QTreeWidget(splitter);mStack->setObjectName("rustDebugStack");mStack->setHeaderLabels({tr("Funzione"),tr("File"),tr("Riga")});
     mVariables=new QTreeWidget(splitter);mVariables->setObjectName("rustDebugVariables");mVariables->setHeaderLabels({tr("Variabile"),tr("Valore"),tr("Tipo")});
     auto watchPane=new QWidget(splitter);auto watchLayout=new QVBoxLayout(watchPane);watchLayout->setContentsMargins(0,0,0,0);

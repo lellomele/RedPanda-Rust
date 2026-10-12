@@ -59,6 +59,30 @@ fn main(){println!("VALUE {}",VALUE);println!("ARGS {:?}",std::env::args().skip(
         RustWorkspace workspace;QString output;connect(&workspace,&RustWorkspace::output,this,[&](const QString &text){output+=text;});QSignalSpy done(&workspace,&RustWorkspace::finished);
         QVERIFY(workspace.startFile(file,"run"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);QCOMPARE(done.first()[0].toInt(),0);QVERIFY(output.contains("quoted arg")&&output.contains("SINGLE_ENV_OK"));
     }
+    void cargoExamplesBenchAndMultipleTargets(){
+        const auto root=mTemp.filePath(QString::fromUtf8("workspace città con spazi"));
+        QDir().mkpath(root+"/src/bin");QDir().mkpath(root+"/examples");QDir().mkpath(root+"/benches");
+        QVERIFY(put(root+"/Cargo.toml","[package]\nname=\"target_probe\"\nversion=\"0.1.0\"\nedition=\"2024\"\n[[bench]]\nname=\"bench_probe\"\nharness=false\n"));
+        QVERIFY(put(root+"/src/lib.rs","pub fn answer()->i32{42}\n#[test] fn correct(){assert_eq!(answer(),42);}\n"));
+        QVERIFY(put(root+"/src/bin/first.rs","fn main(){println!(\"FIRST {}\",target_probe::answer());}\n"));
+        QVERIFY(put(root+"/src/bin/second.rs","fn main(){println!(\"SECOND\");}\n"));
+        QVERIFY(put(root+"/examples/example_probe.rs","fn main(){println!(\"EXAMPLE {}\",target_probe::answer());}\n"));
+        QVERIFY(put(root+"/benches/bench_probe.rs","fn main(){assert_eq!(target_probe::answer(),42);println!(\"BENCH_OK\");}\n"));
+        RustWorkspace workspace;QString output;connect(&workspace,&RustWorkspace::output,this,[&](const QString &text){output+=text;});
+        QString error;RustProjectOptions options;options.targetKind="example";options.targetName="example_probe";
+        QVERIFY(options.save(root,error));QCOMPARE(run(workspace,root,"run"),0);QVERIFY2(output.contains("EXAMPLE 42"),qPrintable(output));
+        output.clear();QCOMPARE(run(workspace,root,"debug-build"),0);QCOMPARE(workspace.artifacts().size(),1);
+        options.targetKind="bin";options.targetName="second";QVERIFY(options.save(root,error));output.clear();
+        QCOMPARE(run(workspace,root,"run"),0);QVERIFY2(output.contains("SECOND")&&!output.contains("FIRST 42"),qPrintable(output));
+        options.targetKind="lib";options.targetName.clear();QVERIFY(options.save(root,error));output.clear();
+        QCOMPARE(run(workspace,root,"test"),0);QVERIFY2(output.contains("test result: ok"),qPrintable(output));
+        options.targetKind="bench";options.targetName="bench_probe";QVERIFY(options.save(root,error));output.clear();
+        QCOMPARE(run(workspace,root,"bench"),0);QVERIFY2(output.contains("BENCH_OK"),qPrintable(output));
+        options=RustProjectOptions{};QVERIFY(options.save(root,error));output.clear();
+        QVERIFY(run(workspace,root,"run")!=0);QVERIFY2(output.contains("solo target"),qPrintable(output));
+        options.targetKind="bin";options.targetName="first";QVERIFY(options.save(root,error));output.clear();
+        QCOMPARE(run(workspace,root,"run"),0);QVERIFY2(output.contains("FIRST 42"),qPrintable(output));
+    }
 };
 QTEST_GUILESS_MAIN(RustProjectChecks)
 #include "rust-project-checks.moc"

@@ -1081,7 +1081,8 @@ private:
     void openRustWorkspace();
     void createRustWorkspace();
     void configureRustProject();
-    void startRustDebug();
+    void startRustDebug(const QString &runToFile={},int runToLine=-1);
+    void configureRustSourceBreakpoints();
     void syncRustBreakpoints();
     void editRustBreakpoint(int index,bool forProject);
     void updateRustDebugActions();

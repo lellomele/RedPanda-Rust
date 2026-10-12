@@ -416,6 +416,8 @@ public:
     bool findLineTextBySeq(size_t lineSeq, QString& text) const;
 
     const std::shared_ptr<const Document> document() const;
+    // Restore logical buffer text, preserving its final empty lines and endings.
+    void setContentPreservingEndings(const QString &text);
 
     void loadFromFile(const QString& filename, const QByteArray& encoding, QByteArray& realEncoding);
     void setContent(const QString& text);

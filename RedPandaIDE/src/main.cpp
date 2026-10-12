@@ -23,6 +23,8 @@
 #include <QAbstractButton>
 #include "utils/os.h"
 #include <QIcon>
+#include <QTextStream>
+#include <cstdio>
 
 #ifdef Q_OS_WIN
 static_assert(WM_APP_OPEN_FILE < 0xc000);
@@ -279,6 +281,13 @@ int main(int argc, char *argv[])
     ResilientApplication app(argc, argv);
     QCoreApplication::setApplicationName(AppIdentity::internalName());
     QGuiApplication::setApplicationDisplayName(AppIdentity::displayName());
+    QCoreApplication::setApplicationVersion(QStringLiteral(REDPANDA_CPP_VERSION));
+    if(app.arguments().size()==2&&(app.arguments().at(1)=="--version"||app.arguments().at(1)=="--help")){
+        QTextStream output(stdout);
+        output<<AppIdentity::displayName()<<" "<<QCoreApplication::applicationVersion()<<"\n";
+        if(app.arguments().at(1)=="--help")output<<"Usage: RedPandaRust [file.rs ...]\n  --version  Print version and exit\n  --help     Print help and exit\n";
+        output.flush();return 0;
+    }
     // Startup dialogs must not post an application quit before the main window exists.
     app.setQuitOnLastWindowClosed(false);
     QString uiTestOutput;

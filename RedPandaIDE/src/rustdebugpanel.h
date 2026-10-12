@@ -17,6 +17,7 @@ public:
     void addDataBreakpoint();
     void configureFunctionBreakpoints();
 signals:
+    void sourceBreakpointsRequested();
     void sourceRequested(const QString &file,int line,int character);
 private:
     struct Pending {QString kind;int epoch=0,target=0;QPointer<QPlainTextEdit> viewer;int start=0;};

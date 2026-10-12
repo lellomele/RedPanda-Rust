@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "debugger.h"
+#include <QSaveFile>
 #include "gdbmidebugger.h"
 #include "../utils.h"
 #include "../utils/pe.h"
@@ -532,6 +533,7 @@ void Debugger::loadForNonproject(const QString &filename)
     if (pConfig->timestamp>0) {
         mBreakpointModel->setBreakpoints(pConfig->breakpoints,forProject);
         mWatchModel->setWatchVars(pConfig->watchVars,forProject);
+        mLastLoadtime=pConfig->timestamp;
     }
 }
 
@@ -546,6 +548,7 @@ void Debugger::loadForProject(const QString &filename, const QString &projectFol
         }
         mBreakpointModel->setBreakpoints(pConfig->breakpoints,forProject);
         mWatchModel->setWatchVars(pConfig->watchVars,forProject);
+        mProjectLastLoadtime=pConfig->timestamp;
     }
 }
 
@@ -837,14 +840,14 @@ void Debugger::save(const QString &filename, const QString& projectFolder)
     foreach (const PWatchVar& watchVar, watchVars) {
         watchVarCompareSet.insert(watchVar->expression);
     }
-    std::shared_ptr<DebugConfig> pConfig;
+    auto pConfig=std::make_shared<DebugConfig>();
     try {
         pConfig = load(filename, forProject);
     } catch (FileError& e) {
 
     }
 
-    QFile file(filename);
+    QSaveFile file(filename);
     if (file.open(QFile::WriteOnly | QFile::Truncate)) {
         foreach (const PBreakpoint& breakpoint, pConfig->breakpoints) {
             QString key = QString("%1-%2").arg(breakpoint->filename).arg(breakpoint->line);
@@ -863,24 +866,19 @@ void Debugger::save(const QString &filename, const QString& projectFolder)
             }
         }
         qint64 saveTimestamp = QDateTime::currentMSecsSinceEpoch();;
-        if (forProject) {
-            mProjectLastLoadtime = saveTimestamp;
-        } else {
-            mLastLoadtime = saveTimestamp;
-        }
         QJsonObject rootObj;
         rootObj["timestamp"] = QString("%1").arg(saveTimestamp);
 
-        if (forProject) {
-            rootObj["breakpoints"] = mBreakpointModel->toJson(projectFolder);
-        }
+        rootObj["breakpoints"] = mBreakpointModel->toJson(projectFolder);
         rootObj["watchvars"] = mWatchModel->toJson(forProject);
         QJsonDocument doc;
         doc.setObject(rootObj);
-        if (file.write(doc.toJson())<0) {
+        const auto bytes=doc.toJson();
+        if (file.write(bytes)!=bytes.size() || !file.commit()) {
             throw FileError(tr("Save file '%1' failed.")
                             .arg(filename));
         }
+        if(forProject)mProjectLastLoadtime=saveTimestamp;else mLastLoadtime=saveTimestamp;
     } else {
         throw FileError(tr("Can't open file '%1' for write.")
                         .arg(filename));

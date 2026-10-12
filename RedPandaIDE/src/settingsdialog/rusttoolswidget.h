@@ -24,6 +24,7 @@ private:
     QTimer *mTimeout;
     QStringList mQueue;
     QString mCurrent;
+    QString mProbeDescription;
     QByteArray mOutput;
     bool mTimedOut=false;
 };

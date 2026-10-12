@@ -6,7 +6,7 @@ Riutilizzati: finestra Qt Designer, editor QSynEdit, split editor, undo/redo, ri
 
 Aggiunti: servizio Cargo asincrono, JSON diagnostici ufficiali, protezione Windows Job Object all’avvio, annullamento con processi figli, stdin, limite output, nuovi progetti Cargo, riconoscimento .rs e sintassi Rust con commenti annidati, stringhe raw e lifetime. Identità e configurazione separate. Logo Rust conservato e integrato.
 
-Il componente rust-analyzer è integrato tramite un client LSP asincrono per diagnostiche, informazioni sui simboli, completamento e navigazione alla definizione. Il debug Rust resta fuori dal perimetro dell’anteprima.
+Il componente rust-analyzer è integrato tramite un client LSP asincrono per diagnostiche, informazioni sui simboli, completamento, navigazione, riferimenti, rinomina e azioni Rust. Il debug è integrato tramite CodeLLDB e protocollo DAP; il relativo strumento è installato separatamente. Il perimetro corrente è descritto nella [matrice delle funzioni Rust](RUST-FEATURE-MATRIX.md).
 
 Il client usa un processo separato condiviso, messaggi JSON-RPC su stdin/stdout e posizioni UTF-16. Sincronizza il testo non salvato con un ritardo di 180 ms; il completamento automatico attende 250 ms. Le richieste interattive scadono dopo 10 secondi e quelle superate vengono annullate. Le risposte devono corrispondere alla versione corrente del documento e, per il completamento, alla posizione del cursore. La IDE valida gli intervalli prima di applicare tutte le modifiche nello stesso gruppo undo. Il server non può applicare modifiche al workspace.
 
