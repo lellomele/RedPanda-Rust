@@ -110,6 +110,9 @@ Editor* EditorManager::newEditor(const QString& filename, const QByteArray& enco
     if (newFile) {
         QString fileTemplate;
         switch (e->fileType()) {
+        case FileType::RustSource:
+            fileTemplate=pMainWindow->codeSnippetManager()->newRustFileTemplate();
+            break;
         case FileType::CSource:
             fileTemplate = pMainWindow->codeSnippetManager()->newCFileTemplate();
             break;

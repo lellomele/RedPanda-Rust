@@ -72,6 +72,8 @@ public:
 
     QString newGASFileTemplate() const;
     void setNewGASFileTemplate(const QString &newContent);
+    QString newRustFileTemplate()const{return mNewRustFileTemplate;}
+    void setNewRustFileTemplate(const QString &value){mNewRustFileTemplate=value;}
 
 private:
     void loadSnippets();
@@ -83,6 +85,7 @@ private:
     QString mNewCppFileTemplate; //C++ file template
     QString mNewCFileTemplate;
     QString mNewGASFileTemplate;
+    QString mNewRustFileTemplate="fn main() {\n\t%INSERT%\n}\n";
     DirSettings *mDirSettings;
 };
 

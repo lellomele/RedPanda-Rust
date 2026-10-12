@@ -61,6 +61,8 @@ struct Breakpoint {
     int line;
     QString filename;
     QString condition;
+    QString hitCondition;
+    QString logMessage;
     bool enabled;
     BreakpointType breakpointType;
     qint64 timestamp;

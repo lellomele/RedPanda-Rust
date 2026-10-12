@@ -7,6 +7,14 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSaveFile>
+#include <QApplication>
+#include <QEventLoop>
+#include <QProgressDialog>
+#include <QScopeGuard>
+#include <QTimer>
+#include <QThread>
+#include <memory>
+#include "../processjob.h"
 
 GitManager::GitManager(QObject *parent) : QObject(parent)
 {
@@ -37,6 +45,7 @@ bool GitManager::createRepository(const QString &folder, QString &output)
     if (existing.exists() || existing.isSymLink())
         return true;
     QStringList contents{".git", "*.o", "*.exe", "*.layout"};
+    if(QCoreApplication::applicationName()=="RedPandaRust")contents.append("/target/");
 #ifdef Q_OS_UNIX
     contents.append("*.");
 #endif
@@ -106,9 +115,10 @@ bool GitManager::isFileInRepository(const QFileInfo& fileInfo)
 {
     QStringList args;
     args.append("ls-files");
+    args.append("--");
     args.append(fileInfo.fileName());
     QString output = runGit(fileInfo.absolutePath(),args);
-    return output.trimmed() == fileInfo.fileName();
+    return pathLines(output).contains(fileInfo.fileName());
 }
 
 bool GitManager::isFileStaged(const QFileInfo &fileInfo)
@@ -117,9 +127,10 @@ bool GitManager::isFileStaged(const QFileInfo &fileInfo)
     args.append("diff");
     args.append("--staged");
     args.append("--name-only");
+    args.append("--");
     args.append(fileInfo.fileName());
     QString output = runGit(fileInfo.absolutePath(),args);
-    return output.trimmed() == fileInfo.fileName();
+    return pathLines(output).contains(fileInfo.fileName());
 }
 
 bool GitManager::isFileChanged(const QFileInfo &fileInfo)
@@ -127,15 +138,17 @@ bool GitManager::isFileChanged(const QFileInfo &fileInfo)
     QStringList args;
     args.append("diff");
     args.append("--name-only");
+    args.append("--");
     args.append(fileInfo.fileName());
     QString output = runGit(fileInfo.absolutePath(),args);
-    return output.trimmed() == fileInfo.fileName();
+    return pathLines(output).contains(fileInfo.fileName());
 }
 
 bool GitManager::add(const QString &folder, const QString &path, QString& output)
 {
     QStringList args;
     args.append("add");
+    args.append("--");
     args.append(path);
     output = runGit(folder,args);
     return isSuccess(output);
@@ -145,6 +158,7 @@ bool GitManager::remove(const QString &folder, const QString &path, QString& out
 {
     QStringList args;
     args.append("rm");
+    args.append("--");
     args.append(path);
     output = runGit(folder,args);
     return isSuccess(output);
@@ -155,6 +169,7 @@ bool GitManager::rename(const QString &folder, const QString &oldName,
 {
     QStringList args;
     args.append("mv");
+    args.append("--");
     args.append(oldName);
     args.append(newName);
     output = runGit(folder,args);
@@ -165,6 +180,7 @@ bool GitManager::restore(const QString &folder, const QString &path, QString& ou
 {
     QStringList args;
     args.append("restore");
+    args.append("--");
     if (path.isEmpty())
         args.append(".");
     else
@@ -236,7 +252,7 @@ QStringList GitManager::listFiles(const QString &folder)
 {
     QStringList args;
     args.append("ls-files");
-    return textToLines(runGit(folder,args));
+    return pathLines(runGit(folder,args));
 }
 
 QStringList GitManager::listStagedFiles(const QString &folder)
@@ -245,7 +261,7 @@ QStringList GitManager::listStagedFiles(const QString &folder)
     args.append("diff");
     args.append("--staged");
     args.append("--name-only");
-    return textToLines(runGit(folder,args));
+    return pathLines(runGit(folder,args));
 }
 
 QStringList GitManager::listChangedFiles(const QString &folder)
@@ -253,7 +269,7 @@ QStringList GitManager::listChangedFiles(const QString &folder)
     QStringList args;
     args.append("diff");
     args.append("--name-only");
-    return textToLines(runGit(folder,args));
+    return pathLines(runGit(folder,args));
 }
 
 QStringList GitManager::listConflicts(const QString &folder)
@@ -262,7 +278,7 @@ QStringList GitManager::listConflicts(const QString &folder)
     args.append("diff");
     args.append("--name-only");
     args.append("--diff-filter=U");
-    return textToLines(runGit(folder,args));
+    return pathLines(runGit(folder,args));
 }
 
 QStringList GitManager::listRemotes(const QString &folder)
@@ -613,6 +629,8 @@ bool GitManager::isValid()
 
 QString GitManager::runGit(const QString& workingFolder, const QStringList &args)
 {
+    if (!mOperationMutex.tryLock()) return QStringLiteral("fatal: another Git operation is running");
+    const auto unlocked = qScopeGuard([this]{mOperationMutex.unlock();});
     if (!isValid())
         return "fatal: git doesn't exist";
     QFileInfo fileInfo(pSettings->vcs().gitPath());
@@ -624,30 +642,70 @@ QString GitManager::runGit(const QString& workingFolder, const QStringList &args
                             args.join("\" \"")));
 //    qDebug()<<"---------";
 //    qDebug()<<args;
-    QProcessEnvironment env;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 #ifdef Q_OS_WIN
-    env.insert("PATH",pSettings->dirs().appDir());
-    env.insert("GIT_ASKPASS",includeTrailingPathDelimiter(pSettings->dirs().appDir())+"redpanda-win-git-askpass.exe");
+    env.insert("PATH",pSettings->dirs().appDir()+QDir::listSeparator()+fileInfo.absolutePath()+QDir::listSeparator()+env.value("PATH"));
+    const auto askPass = includeTrailingPathDelimiter(pSettings->dirs().appDir())+"redpanda-win-git-askpass.exe";
 #else // Unix
-    env.insert(QProcessEnvironment::systemEnvironment());
-    env.insert("LC_ALL", "C");
-    env.insert("LANGUAGE","");
-    env.insert("GIT_ASKPASS",includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"redpanda-git-askpass");
+    const auto askPass = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"redpanda-git-askpass";
 #endif
-    const ProcessOutput processOutput = runAndGetOutput(
-                fileInfo.absoluteFilePath(),
-                workingFolder,
-                args,
-                "",
-                false,
-                false,
-                env);
-    QString output = escapeUTF8String(processOutput.standardOutput);
-    QString processFailure = processOutput.errorMessage;
-    if (processFailure.isEmpty() && !processOutput.normalExit)
+    env.insert("LC_ALL", "C"); env.insert("LANGUAGE", "");
+    env.insert("GIT_TERMINAL_PROMPT", "0");
+    if (QFileInfo(askPass).isExecutable()) env.insert("GIT_ASKPASS", askPass);
+    ProcessJob job;
+    QProcess process;
+    if (!job.protect(process)) return QStringLiteral("fatal: cannot protect the Git process tree");
+    process.setProcessEnvironment(env); process.setWorkingDirectory(workingFolder);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    QEventLoop loop; QTimer deadline; deadline.setSingleShot(true);
+    QByteArray bytes; QString processFailure;
+    const auto abort = [&](const QString &reason) {
+        if (processFailure.isEmpty()) processFailure = reason;
+        job.terminate(); process.kill();
+    };
+    connect(&process, &QProcess::readyRead, &loop, [&] {
+        const auto chunk = process.readAll();
+        if (chunk.size() > 16*1024*1024-bytes.size()) abort(tr("Git output exceeds 16 MiB"));
+        else bytes.append(chunk);
+    });
+    connect(&process, &QProcess::finished, &loop, &QEventLoop::quit);
+    connect(&process, &QProcess::errorOccurred, &loop, [&](QProcess::ProcessError error) {
+        if (processFailure.isEmpty()) processFailure = process.errorString();
+        if (error == QProcess::FailedToStart) loop.quit();
+    });
+    connect(&deadline, &QTimer::timeout, &loop, [&] { abort(tr("Git timed out")); });
+    // A modal progress window keeps events and repainting alive while the
+    // existing synchronous Git API is in use, and prevents concurrent edits.
+    const bool query=QSet<QString>{"status","ls-files","diff","log","rev-list","rev-parse","config","branch"}.contains(args.value(0));
+    const bool interactive=!query&&qobject_cast<QApplication *>(QCoreApplication::instance())&&QThread::currentThread()==QCoreApplication::instance()->thread();
+    std::unique_ptr<QProgressDialog> progress;
+    if (interactive) {
+        progress = std::make_unique<QProgressDialog>(tr("Git: %1").arg(args.value(0)), tr("Cancel"), 0, 0);
+        progress->setWindowModality(Qt::ApplicationModal); progress->setMinimumDuration(500);
+        progress->setValue(0);
+        connect(progress.get(), &QProgressDialog::canceled, &loop, [&] { abort(tr("Git cancelled")); });
+    }
+    process.start(fileInfo.absoluteFilePath(), args); process.closeWriteChannel();
+    if(interactive){deadline.start(120000);loop.exec();deadline.stop();}
+    else{
+        // QFileSystemModel calls its icon provider while holding model locks.
+        // Processing the application event queue here can deadlock the model
+        // during startup. Local queries are bounded and use QProcess's wait.
+        if(!process.waitForFinished(query?5000:120000)){
+            abort(processFailure.isEmpty()?tr("Git timed out"):processFailure);
+            process.waitForFinished(1000);
+        }
+    }
+    const auto tail = process.readAll();
+    if (tail.size() <= 16*1024*1024-bytes.size()) bytes.append(tail);
+    else if (processFailure.isEmpty()) processFailure = tr("Git output exceeds 16 MiB");
+    if (processFailure.isEmpty() && process.exitStatus() != QProcess::NormalExit)
         processFailure = QStringLiteral("git did not exit normally");
-    else if (processFailure.isEmpty() && processOutput.exitCode != 0)
-        processFailure = QStringLiteral("git exited with code %1").arg(processOutput.exitCode);
+    else if (processFailure.isEmpty() && process.exitCode() != 0)
+        processFailure = QStringLiteral("git exited with code %1").arg(process.exitCode());
+    // Git quotes individual path records, not log messages or diagnostics.
+    // Preserve literal quotes/backslashes in all general command output.
+    QString output = QString::fromUtf8(bytes);
     if (!processFailure.isEmpty()) {
         if (!output.isEmpty() && !output.endsWith('\n'))
             output.append('\n');
@@ -744,6 +802,14 @@ QString GitManager::escapeUTF8String(const QByteArray &rawString)
         }
     }
     return QString::fromUtf8(stringValue);
+}
+
+QStringList GitManager::pathLines(const QString &output)
+{
+    auto lines=textToLines(output);
+    for(auto &line:lines)if(line.size()>=2&&line.startsWith('"')&&line.endsWith('"'))
+        line=escapeUTF8String(line.toUtf8());
+    return lines;
 }
 
 GitError::GitError(const QString &reason):BaseError(reason)

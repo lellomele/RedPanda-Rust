@@ -6,11 +6,19 @@
 #include "rusttools.h"
 #include "rustlspclient.h"
 #include "rusteditorsupport.h"
+#include "rustdebugsession.h"
+#include "rustdebugpanel.h"
+#include "rustprojectdialog.h"
+#include "rustcleandialog.h"
+#include "rustnavigation.h"
+#include "debugger/debugger.h"
+#include "debugger/debuggermodels.h"
 #include "settings.h"
 #include "editor.h"
 #include "editormanager.h"
 #include "systemconsts.h"
 #include "widgets/issuestable.h"
+#include "widgets/customfilesystemmodel.h"
 #include <QInputDialog>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -23,11 +31,26 @@
 #include <QRegularExpression>
 #include <QFileInfo>
 #include <QDir>
+#include <QTreeWidget>
+#include <QUrl>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QCheckBox>
 
 void MainWindow::initRustWorkspace() {
     RustTools::setSettingsFile(pSettings->filename());
     mRustWorkspace=new RustWorkspace(this);
     mRustLanguageClient=new RustLspClient(this);
+    mRustDebugger=new RustDebugSession(this);
+    mRustDebugPanel=new RustDebugPanel(mRustDebugger,pSettings->filename(),ui->tabMessages);
+    ui->tabMessages->addTab(mRustDebugPanel,tr("Debug Rust"));
+    auto debugTabInfo=std::make_shared<TabWidgetInfo>();debugTabInfo->order=ui->tabMessages->count()-1;debugTabInfo->text=tr("Debug Rust");mTabMessagesData.insert(mRustDebugPanel,debugTabInfo);
+    connect(mRustDebugPanel,&RustDebugPanel::sourceRequested,this,[this](const QString &file,int line,int){setActiveBreakpoint(file,line);});
+    connect(mRustDebugger,&RustDebugSession::stateChanged,this,[this](RustDebugSession::State state){
+        if(state==RustDebugSession::State::Running||state==RustDebugSession::State::Idle)removeActiveBreakpoints();
+        updateCompileActions();updateRustDebugActions();
+    });
+    connect(mRustDebugger,&RustDebugSession::error,this,[this](const QString &text){statusBar()->showMessage(text,12000);});
     auto languageStatus=new QLabel(tr("rust-analyzer: in attesa di un file Rust"),this);
     languageStatus->setObjectName("rustAnalyzerStatus");
     languageStatus->setMaximumWidth(350);ui->statusbar->addPermanentWidget(languageStatus);
@@ -40,6 +63,9 @@ void MainWindow::initRustWorkspace() {
             auto editor=(*mEditorManager)[i];
             if(editor->findChild<RustEditorSupport *>("rustEditorSupport",Qt::FindDirectChildrenOnly))continue;
             auto support=new RustEditorSupport(editor,mRustLanguageClient);
+            connect(editor,&Editor::breakpointAdded,this,[this]{syncRustBreakpoints();});
+            connect(editor,&Editor::breakpointRemoved,this,[this]{syncRustBreakpoints();});
+            connect(editor,&Editor::breakpointsCleared,this,[this]{QTimer::singleShot(0,this,&MainWindow::syncRustBreakpoints);});
             connect(support,&RustEditorSupport::definitionRequested,this,[this](const QString &file,int line,int character){
                 if(auto target=openFile(file)){
                     if(line>=0&&line<target->lineCount()&&character>=0&&character<=target->lineText(line).size())
@@ -49,6 +75,26 @@ void MainWindow::initRustWorkspace() {
         }
     };
     connect(mEditorManager,&EditorManager::editorOpenned,this,attach);attach();
+    ui->classBrowser->hide();auto outline=new QTreeWidget(ui->tabStructure);outline->setObjectName("rustOutline");outline->setHeaderLabels({tr("Simbolo Rust"),tr("Dettagli")});ui->tabStructure->layout()->addWidget(outline);
+    mRustNavigation=new RustNavigation(mEditorManager,mRustLanguageClient,outline,this,[this](const QString &file){return openFile(file);});
+    connect(mRustNavigation,&RustNavigation::status,this,[this](const QString &message){statusBar()->showMessage(message,12000);});
+    connect(mRustNavigation,&RustNavigation::generatedText,this,[this](const QString &title,const QString &contents){
+        auto editor=mEditorManager->newEditor(title+".rs",ENCODING_UTF8,FileType::RustSource,{},false,true);editor->setContent(contents);editor->setModified(false);editor->setReadOnly(true);editor->setAutoBackupEnabled(false);mEditorManager->activeEditor(editor,true);
+    });
+    connect(mRustNavigation,&RustNavigation::referencesReady,this,[this](const QJsonArray &locations){
+        auto dialog=new QDialog(this);dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setObjectName("rustReferences");dialog->setWindowTitle(tr("Riferimenti / simboli Rust"));dialog->resize(850,500);auto layout=new QVBoxLayout(dialog);auto list=new QTreeWidget(dialog);list->setHeaderLabels({tr("Simbolo"),tr("File"),tr("Riga")});layout->addWidget(list);
+        int count=0;for(const auto &entry:locations){if(++count>10000)break;const auto location=entry.toObject();const auto url=QUrl(location.value("uri").toString());if(!url.isLocalFile())continue;const auto point=location.value("range").toObject().value("start").toObject();
+            auto row=new QTreeWidgetItem(list,{location.value("name").toString(),url.toLocalFile(),QString::number(point.value("line").toInt()+1)});row->setData(0,Qt::UserRole,location);}
+        list->resizeColumnToContents(1);connect(list,&QTreeWidget::itemActivated,dialog,[this](QTreeWidgetItem *item){const auto value=item->data(0,Qt::UserRole).toJsonObject();const auto point=value.value("range").toObject().value("start").toObject();if(auto editor=openFile(QUrl(value.value("uri").toString()).toLocalFile()))editor->setCaretXYCentered({point.value("character").toInt(),point.value("line").toInt()});});dialog->show();
+    });
+    // The inherited editor menu is populated/cleared by its own callbacks.
+    // Rust actions need independent ownership and must not enter that backup.
+    auto rustRefactor=new QMenu(tr("Refactoring Rust"),ui->menubar);
+    rustRefactor->setObjectName("rustRefactorMenu");ui->menubar->insertMenu(ui->menuProject->menuAction(),rustRefactor);
+    for(const auto &item:QList<QPair<QString,std::function<void()>>>{{tr("Trova riferimenti Rust"),[this]{mRustNavigation->references();}},{tr("Rinomina simbolo Rust…"),[this]{mRustNavigation->rename();}},{tr("Azioni Rust…"),[this]{mRustNavigation->codeActions();}},{tr("Espandi macro Rust"),[this]{mRustNavigation->macroExpansion();}}}){
+        auto action=rustRefactor->addAction(item.first);connect(action,&QAction::triggered,this,item.second);
+    }
+    auto symbols=ui->menuSearch->addAction(tr("Cerca simbolo Rust…"));connect(symbols,&QAction::triggered,mRustNavigation,&RustNavigation::searchSymbols);
     mRustRestartAnalyzer=new QAction(tr("Riavvia rust-analyzer"),this);
     ui->menuTools->addAction(mRustRestartAnalyzer);
     connect(mRustRestartAnalyzer,&QAction::triggered,mRustLanguageClient,&RustLspClient::restart);
@@ -63,7 +109,37 @@ void MainWindow::initRustWorkspace() {
     for(const QString &name: {"actionDebug","actionInterrupt","actionStep_Over","actionStep_Into","actionStep_Out","actionRun_To_Cursor","actionContinue","actionAdd_Watch","actionAdd_Watchpoint","actionView_CPU_Window","actionGenerate_Assembly","actionGenerate_GIMPLE","actionPreprocess","actionMakeClean","actionMakefileClean","actionNew_GAS_File","actionNew_NASM_File","actionRun_Parameters","actionC_C_Header","actionC_File","actionCPP_File","actionEGE_Manual","actionOI_Wiki","actionTurtle_Graphics_Manual","actionDocument","actionIA_32_Assembly_Language_Reference_Manual","actionx86_Assembly_Language_Reference_Manual"}) {
         if(auto action=findChild<QAction *>(name))action->setVisible(false);
     }
-    ui->menuProject->menuAction()->setVisible(false);
+    for(auto action:{ui->actionDebug,ui->actionInterrupt,ui->actionStep_Over,ui->actionStep_Into,ui->actionStep_Out,ui->actionRun_To_Cursor,ui->actionContinue,ui->actionAdd_Watch,ui->actionAdd_Watchpoint,ui->actionView_CPU_Window})action->setVisible(true);
+    ui->actionAdd_Watchpoint->setText(tr("Watchpoint sulla variabile Rust selezionata…"));
+    ui->actionDebug->setText(tr("Avvia debug Rust"));ui->actionView_CPU_Window->setText(tr("Disassemblato Rust"));
+    ui->actionCompiler_Options->setText(tr("Opzioni progetto / file Rust…"));ui->actionRun_Parameters->setText(tr("Argomenti e ambiente Rust…"));ui->actionRun_Parameters->setVisible(true);
+    ui->actionGenerate_Assembly->setText(tr("Genera assembly Rust"));ui->actionGenerate_Assembly->setVisible(true);
+    ui->actionGenerate_GIMPLE->setText(tr("Genera IR LLVM"));ui->actionGenerate_GIMPLE->setVisible(true);
+    updateRustDebugActions();
+    ui->menuProject->clear();ui->menuProject->setTitle(tr("Progetto Rust"));ui->menuProject->menuAction()->setVisible(true);
+    auto projectOptions=ui->menuProject->addAction(tr("Opzioni progetto / file Rust…"));connect(projectOptions,&QAction::triggered,this,&MainWindow::configureRustProject);
+    for(const auto &item:QList<QPair<QString,QString>>{{"doc",tr("Genera documentazione Cargo")},{"fetch",tr("Scarica dipendenze Cargo")},{"bench",tr("Benchmark Cargo")},{"clean",tr("Pulisci artefatti Cargo")}}){
+        auto action=ui->menuProject->addAction(item.second);const auto command=item.first;
+        action->setObjectName("rust-command-"+command);
+        connect(action,&QAction::triggered,this,[this,command]{
+            if(command=="clean"){
+                if(mRustWorkspace->busy()||(mRustDebugger&&mRustDebugger->active()))return;
+                const auto editor=mEditorManager->getEditor();auto root=editor?RustWorkspace::findRoot(editor->filename()):mRustRoot;if(root.isEmpty())root=mRustRoot;
+                if(root.isEmpty()){statusBar()->showMessage(tr("Apri un progetto Cargo per pulirne gli artefatti."),10000);return;}
+                QStringList protectedFiles;for(int i=0;i<mEditorManager->pageCount();++i)protectedFiles.append((*mEditorManager)[i]->filename());
+                // Native directory watches can keep an artefact directory
+                // open on Windows. Pause only this model during recycling.
+                const auto fileOptions=mFileSystemModel->options();
+                mFileSystemModel->setOption(QFileSystemModel::DontWatchForChanges,true);
+                mRustLanguageClient->setSuspended(true);
+                RustCleanDialog dialog(root,protectedFiles,this);dialog.exec();
+                mRustLanguageClient->setSuspended(false);
+                mFileSystemModel->setOptions(fileOptions);setFilesViewRoot(root);return;
+            }
+            runRustCommand(command);
+        });
+        connect(mRustWorkspace,&RustWorkspace::busyChanged,action,[this,action](bool busy){action->setEnabled(!busy&&(!mRustDebugger||!mRustDebugger->active()));});
+    }
     ui->menuFile_Type->menuAction()->setVisible(false);
     ui->tabMessages->setTabText(ui->tabMessages->indexOf(ui->tabToolsOutput),tr("Cargo / Console"));
     ui->txtToolsOutput->setMaximumBlockCount(10000);
@@ -88,17 +164,29 @@ void MainWindow::initRustWorkspace() {
     });
     connect(mRustWorkspace,&RustWorkspace::issue,ui->tableIssues,&IssuesTable::addIssue);
     connect(mRustWorkspace,&RustWorkspace::busyChanged,this,[this,input,eof](bool busy){input->setEnabled(busy);eof->setEnabled(busy);updateCompileActions();});
+    connect(mRustWorkspace,&RustWorkspace::finished,this,[this](int code,bool cancelled){
+        const auto command=mRustWorkspace->command();if(code||cancelled||(command!="asm"&&command!="llvm"))return;
+        for(const auto &path:mRustWorkspace->artifacts()){
+            QFile file(path);if(!file.open(QIODevice::ReadOnly)||file.size()>8*1024*1024)continue;
+            auto editor=mEditorManager->newEditor(command=="asm"?"Assembly Rust.s":"IR Rust.ll",ENCODING_UTF8,command=="asm"?FileType::GAS:FileType::Other,{},false,true);
+            editor->setContent(QString::fromUtf8(file.readAll()));editor->setModified(false);editor->setAutoBackupEnabled(false);editor->setReadOnly(true);mEditorManager->activeEditor(editor,true);
+        }
+    });
 }
 void MainWindow::applyRustUiRestrictions(){
-    for(QWidget *tab:{ui->tabProject,ui->tabWatch,ui->tabStructure,ui->tabProblemSet})showHideInfosTab(tab,false);
+    for(QWidget *tab:{ui->tabProject,ui->tabWatch,ui->tabProblemSet})showHideInfosTab(tab,false);
+    showHideInfosTab(ui->tabStructure,pSettings->ui().showStructure());ui->actionStructure->setVisible(true);ui->actionStructure->setText(tr("Struttura Rust"));
     for(QWidget *tab:{ui->tabDebug,ui->tabProblem})showHideMessagesTab(tab,false);
-    for(QAction *action:{ui->actionProject,ui->actionWatch,ui->actionStructure,ui->actionProblem_Set,ui->actionDebug_Window,ui->actionProblem})action->setVisible(false);
+    for(QAction *action:{ui->actionProject,ui->actionWatch,ui->actionProblem_Set,ui->actionProblem})action->setVisible(false);
+    ui->actionDebug_Window->setVisible(true);ui->actionDebug_Window->setText(tr("Debug Rust"));
+    if(mRustDebugPanel)showHideMessagesTab(mRustDebugPanel,pSettings->ui().showDebug());
     ui->toolbarCompilerSet->setVisible(false);
     ui->menuRefactor->menuAction()->setVisible(false);
-    ui->actionInterrupt->setVisible(false);
+    if(auto menu=findChild<QMenu *>("rustRefactorMenu"))menu->menuAction()->setVisible(true);
+    ui->actionInterrupt->setVisible(true);
 }
 bool MainWindow::runRustCommand(const QString &command){
-    if(mRustWorkspace->busy())return false;
+    if(mRustWorkspace->busy()||(mRustDebugger&&mRustDebugger->active()))return false;
     auto editor=mEditorManager->getEditor();
     // Save the active Rust document before deciding whether it belongs to Cargo.
     if(editor && editor->fileType()==FileType::RustSource && (editor->modified()||editor->isNew())){
@@ -155,4 +243,64 @@ void MainWindow::createRustWorkspace(){
     });
     ui->txtToolsOutput->clear();stretchMessagesPanel(true);ui->tabMessages->setCurrentWidget(ui->tabToolsOutput);
     if(!mRustWorkspace->start(parent,"new",{name,"--vcs","none"}))disconnect(*connection);
+}
+void MainWindow::updateRustDebugActions(){
+    if(!mRustDebugger)return;
+    const auto state=mRustDebugger->state();const bool stopped=state==RustDebugSession::State::Stopped;
+    ui->actionInterrupt->setVisible(true);ui->actionInterrupt->setEnabled(state==RustDebugSession::State::Running);
+    for(auto action:{ui->actionStep_Over,ui->actionStep_Into,ui->actionStep_Out,ui->actionRun_To_Cursor,ui->actionContinue,ui->actionView_CPU_Window})action->setEnabled(stopped);
+    ui->actionAdd_Watch->setEnabled(true);
+    ui->actionAdd_Watchpoint->setEnabled(stopped&&mRustDebugger->capabilities().value("supportsDataBreakpoints").toBool());
+}
+void MainWindow::syncRustBreakpoints(){
+    if(!mRustDebugger||!mDebugger)return;
+    QHash<QString,QJsonArray> groups;
+    for(const auto &breakpoint:mDebugger->breakpointModel()->breakpoints(false)){
+        if(!breakpoint->enabled||breakpoint->breakpointType!=BreakpointType::Breakpoint)continue;
+        QJsonObject entry{{"line",breakpoint->line+1}};if(!breakpoint->condition.isEmpty())entry.insert("condition",breakpoint->condition);
+        if(!breakpoint->hitCondition.isEmpty())entry.insert("hitCondition",breakpoint->hitCondition);
+        if(!breakpoint->logMessage.isEmpty())entry.insert("logMessage",breakpoint->logMessage);
+        groups[breakpoint->filename].append(entry);
+    }
+    for(const auto &file:mRustBreakpointFiles)if(!groups.contains(file))mRustDebugger->setBreakpoints(file,{});
+    mRustBreakpointFiles.clear();for(auto it=groups.begin();it!=groups.end();++it){mRustDebugger->setBreakpoints(it.key(),it.value());mRustBreakpointFiles.insert(it.key());}
+}
+void MainWindow::editRustBreakpoint(int index,bool forProject){
+    auto breakpoint=mDebugger->breakpointModel()->breakpoint(index,forProject);if(!breakpoint)return;
+    QDialog dialog(this);dialog.setObjectName("rustBreakpointOptions");dialog.setWindowTitle(tr("Breakpoint Rust"));auto layout=new QVBoxLayout(&dialog);auto form=new QFormLayout;layout->addLayout(form);
+    auto enabled=new QCheckBox(tr("Abilitato"),&dialog);enabled->setChecked(breakpoint->enabled);form->addRow(enabled);
+    auto condition=new QLineEdit(breakpoint->condition,&dialog);condition->setObjectName("rustBreakpointCondition");condition->setMaxLength(4096);form->addRow(tr("Condizione:"),condition);
+    auto hit=new QLineEdit(breakpoint->hitCondition,&dialog);hit->setObjectName("rustBreakpointHit");hit->setMaxLength(100);hit->setPlaceholderText(tr("Numero di incontri, ad esempio 3"));form->addRow(tr("Hit condition:"),hit);
+    auto log=new QLineEdit(breakpoint->logMessage,&dialog);log->setObjectName("rustBreakpointLog");log->setMaxLength(4096);log->setPlaceholderText(tr("Se compilato, stampa senza fermare: total = {total}"));form->addRow(tr("Messaggio logpoint:"),log);
+    auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(dialog.exec()!=QDialog::Accepted)return;
+    // The dialog may process events that remove/reorder breakpoints. Validate
+    // identity again before writing back to the model.
+    if(mDebugger->breakpointModel()->breakpoint(index,forProject)!=breakpoint)return;
+    breakpoint->enabled=enabled->isChecked();breakpoint->hitCondition=hit->text();breakpoint->logMessage=log->text();
+    breakpoint->timestamp=QDateTime::currentMSecsSinceEpoch();
+    mDebugger->setBreakPointCondition(index,condition->text(),forProject);syncRustBreakpoints();
+}
+void MainWindow::startRustDebug(){
+    if(!mRustDebugger||mRustDebugger->active()||mRustWorkspace->busy()||mRustPreparingDebug)return;
+    mRustPreparingDebug=true;auto connection=std::make_shared<QMetaObject::Connection>();
+    *connection=connect(mRustWorkspace,&RustWorkspace::finished,this,[this,connection](int code,bool cancelled){
+        disconnect(*connection);mRustPreparingDebug=false;if(code!=0||cancelled)return;
+        QStringList candidates;for(const auto &path:mRustWorkspace->artifacts())if(QFileInfo(path).isExecutable())candidates.append(path);
+        if(candidates.isEmpty()){statusBar()->showMessage(tr("La compilazione non ha prodotto un eseguibile da sottoporre a debug."),10000);return;}
+        QString program=candidates.first();if(candidates.size()>1){bool ok=false;program=QInputDialog::getItem(this,tr("Eseguibile Rust"),tr("Scegli il programma:"),candidates,0,false,&ok);if(!ok)return;}
+        syncRustBreakpoints();const auto editor=mEditorManager->getEditor();
+        const auto options=mRustWorkspace->options();const auto directory=options.runDirectory(mRustWorkspace->root());
+        if(mRustDebugger->launch(program,directory,options.arguments,options.processEnvironment(),mRustBreakpointFiles.isEmpty())){
+            showHideMessagesTab(mRustDebugPanel,true);ui->actionDebug_Window->setChecked(true);
+            stretchMessagesPanel(true);ui->tabMessages->setCurrentWidget(mRustDebugPanel);updateCompileActions();
+        }
+    });
+    if(!runRustCommand("debug-build")){disconnect(*connection);mRustPreparingDebug=false;}
+}
+void MainWindow::configureRustProject(){
+    if(mRustWorkspace->busy()||(mRustDebugger&&mRustDebugger->active()))return;
+    const auto editor=mEditorManager->getEditor();auto root=editor?RustWorkspace::findRoot(editor->filename()):mRustRoot;
+    if(root.isEmpty()&&editor)root=QFileInfo(editor->filename()).absolutePath();if(root.isEmpty()){openRustWorkspace();root=mRustRoot;}if(root.isEmpty())return;
+    RustProjectDialog dialog(root,this);dialog.exec();
 }

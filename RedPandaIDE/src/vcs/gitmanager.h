@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QFileInfo>
 #include <QSet>
+#include <QMutex>
 #include "../utils.h"
 #include "gitutils.h"
 
@@ -102,7 +103,9 @@ private:
     QString runGit(const QString& workingFolder, const QStringList& args);
 
     QString escapeUTF8String(const QByteArray& rawString);
+    QStringList pathLines(const QString &output);
 private:
+    QMutex mOperationMutex;
 };
 
 #endif // GITMANAGER_H

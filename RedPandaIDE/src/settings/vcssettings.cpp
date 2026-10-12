@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QStandardPaths>
 
 VCSSettings::VCSSettings(SettingsPersistor *persistor):
     BaseSettings{persistor,SETTING_VCS},
@@ -18,6 +19,7 @@ void VCSSettings::doSave()
 void VCSSettings::doLoad()
 {
     setGitPath(stringValue("git_path", ""));
+    if (!mGitOk) detectGitInPath();
 }
 
 const QString &VCSSettings::gitPath() const
@@ -27,17 +29,15 @@ const QString &VCSSettings::gitPath() const
 
 void VCSSettings::setGitPath(const QString &newGitPath)
 {
-    if (mGitPath!=newGitPath) {
-        mGitPath = newGitPath;
-        validateGit();
-    }
+    mGitPath = newGitPath;
+    validateGit();
 }
 
 void VCSSettings::validateGit()
 {
     mGitOk = false;
     QFileInfo fileInfo(mGitPath);
-    if (!fileInfo.exists()) {
+    if (!fileInfo.isFile() || !fileInfo.isExecutable()) {
         return;
     }
     mGitOk=true;
@@ -57,6 +57,26 @@ bool VCSSettings::gitOk() const
 
 void VCSSettings::detectGitInPath()
 {
+    const QString found = QStandardPaths::findExecutable(GIT_PROGRAM);
+    if (!found.isEmpty()) {
+        setGitPath(found);
+        if (mGitOk) { save(); return; }
+    }
+#ifdef Q_OS_WIN
+    // Git for Windows is commonly installed without adding it to PATH.
+    const auto system = QProcessEnvironment::systemEnvironment();
+    for (const auto &key : {"ProgramFiles", "ProgramW6432", "LOCALAPPDATA"}) {
+        const auto base = system.value(key);
+        if (base.isEmpty()) continue;
+        for (const auto &suffix : {"/Git/cmd/git.exe", "/Programs/Git/cmd/git.exe"}) {
+            const auto candidate = base + suffix;
+            if (QFileInfo(candidate).isFile()) {
+                setGitPath(candidate);
+                if (mGitOk) { save(); return; }
+            }
+        }
+    }
+#endif
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     QString path = env.value("PATH");
     QStringList pathList = path.split(PATH_SEPARATOR);

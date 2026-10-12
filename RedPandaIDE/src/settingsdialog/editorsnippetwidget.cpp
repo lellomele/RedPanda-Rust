@@ -37,6 +37,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QScopedValueRollback>
+#include <QCoreApplication>
+#include <QVBoxLayout>
 #include "../snippetsstorage.h"
 
 class SnippetLanguageDelegate : public QStyledItemDelegate {
@@ -44,7 +46,7 @@ public:
     using QStyledItemDelegate::QStyledItemDelegate;
     QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &) const override {
         auto *box = new QComboBox(parent);
-        box->addItem(QObject::tr("All"), "all"); box->addItem("C", "c"); box->addItem("C++", "cpp"); box->addItem(QObject::tr("Assembly"), "asm");
+        box->addItem(QObject::tr("All"), "all"); box->addItem("C", "c"); box->addItem("C++", "cpp"); box->addItem("Rust", "rust"); box->addItem(QObject::tr("Assembly"), "asm");
         return box;
     }
     void setEditorData(QWidget *editor, const QModelIndex &index) const override {
@@ -88,7 +90,8 @@ EditorSnippetWidget::EditorSnippetWidget(ColorManager *colorManager,const QStrin
     addTool(tr("Restore defaults"), [this] {
         if (QMessageBox::question(this, tr("Restore defaults"), tr("Replace this snippet library with the built-in defaults?")) != QMessageBox::Yes) return;
         QList<PCodeSnippet> defaults; QString error;
-        if (SnippetStorage::read(":/config/codesnippets.json", defaults, error)) { mModel.updateSnippets(defaults); mSearch->clear(); setSettingsChanged(); }
+        const auto path=QCoreApplication::applicationName()=="RedPandaRust"?":/config/codesnippets-rust.json":":/config/codesnippets.json";
+        if (SnippetStorage::read(path, defaults, error)) { mModel.updateSnippets(defaults); mSearch->clear(); setSettingsChanged(); }
         else QMessageBox::warning(this, tr("Snippet library"), error);
     });
     addTool(tr("Placeholder"), [this] { ui->editCode->setSelText("%REPL_BEGIN%" + ui->editCode->selText() + "%REPL_END%"); });
@@ -153,6 +156,11 @@ EditorSnippetWidget::EditorSnippetWidget(ColorManager *colorManager,const QStrin
     ui->editCppFileTemplate->setFileType(FileType::CppSource);
     ui->editCFileTemplate->setFileType(FileType::CSource);
     ui->editGASFileTemplate->setFileType(FileType::ATTASM);
+    if(QCoreApplication::applicationName()=="RedPandaRust"){
+        ui->editCode->setFileType(FileType::RustSource);
+        auto page=new QWidget(ui->tabWidget);auto layout=new QVBoxLayout(page);mRustTemplate=new Editor(page);mRustTemplate->setObjectName("rustNewFileTemplate");layout->addWidget(mRustTemplate);ui->tabWidget->addTab(page,tr("Nuovo file Rust"));
+        mRustTemplate->setEditorSettings(&pSettings->editor());mRustTemplate->setColorManager(colorManager);mRustTemplate->applySettings();mRustTemplate->setFileType(FileType::RustSource);connect(mRustTemplate,&Editor::changed,this,&SettingsWidget::setSettingsChanged);
+    }
     //ui->editGASFileTemplate->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::ATTAssembly));
 }
 
@@ -167,6 +175,7 @@ void EditorSnippetWidget::doLoad()
     ui->editCppFileTemplate->setContent(pMainWindow->codeSnippetManager()->newCppFileTemplate());
     ui->editCFileTemplate->setContent(pMainWindow->codeSnippetManager()->newCFileTemplate());
     ui->editGASFileTemplate->setContent(pMainWindow->codeSnippetManager()->newGASFileTemplate());
+    if(mRustTemplate)mRustTemplate->setContent(pMainWindow->codeSnippetManager()->newRustFileTemplate());
 }
 
 void EditorSnippetWidget::doSave()
@@ -175,14 +184,16 @@ void EditorSnippetWidget::doSave()
     if (!SnippetStorage::validate(mModel.snippets(), error)) throw FileError(error);
     auto *manager = pMainWindow->codeSnippetManager();
     const auto previous = SnippetStorage::clone(manager->snippets());
-    const QString cpp = manager->newCppFileTemplate(), c = manager->newCFileTemplate(), gas = manager->newGASFileTemplate();
+    const QString cpp = manager->newCppFileTemplate(), c = manager->newCFileTemplate(), gas = manager->newGASFileTemplate(),rust=manager->newRustFileTemplate();
     manager->setSnippets(mModel.snippets());
     manager->setNewCppFileTemplate(ui->editCppFileTemplate->text());
     manager->setNewCFileTemplate(ui->editCFileTemplate->text());
     manager->setNewGASFileTemplate(ui->editGASFileTemplate->text());
+    if(mRustTemplate)manager->setNewRustFileTemplate(mRustTemplate->text());
     try { manager->save(); }
     catch (...) {
         manager->setSnippets(previous); manager->setNewCppFileTemplate(cpp); manager->setNewCFileTemplate(c); manager->setNewGASFileTemplate(gas);
+        manager->setNewRustFileTemplate(rust);
         throw;
     }
 }
@@ -191,7 +202,7 @@ void EditorSnippetWidget::on_btnAdd_clicked()
 {
     mSearch->clear();
     const QString prefix = QString("snippet_%1").arg(getNewFileNumber());
-    mModel.addSnippet(tr("New snippet"), prefix, "%INSERT%", "", 0);
+    mModel.addSnippet(tr("New snippet"), prefix, "%INSERT%", "", 0,QCoreApplication::applicationName()=="RedPandaRust"?"rust":"all");
     selectSnippet(mModel.lastSnippetCaption());
     ui->tblSnippets->edit(mProxy->mapFromSource(mModel.lastSnippetCaption()));
     setSettingsChanged();

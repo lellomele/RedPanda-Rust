@@ -1,0 +1,75 @@
+[
+  {
+    "file": "CodeLLDB-MIT.txt",
+    "url": "https://raw.githubusercontent.com/vadimcn/codelldb/v1.12.3/LICENSE",
+    "sha256": "6eedaf734957b02e4bcc408ea0ecb55de0f6b2ab18e92339327e863fdad86aed",
+    "bytes": 1081
+  },
+  {
+    "file": "LLVM-Apache-2.0-exceptions.txt",
+    "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-22.1.8/llvm/LICENSE.TXT",
+    "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+    "bytes": 15141
+  },
+  {
+    "file": "LLDB-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-22.1.8/lldb/LICENSE.TXT",
+    "sha256": "76be4deddeef87f6fa9940f4992a9506c7bb222af60eb3b2a47cf65719528bbe",
+    "bytes": 15032
+  },
+  {
+    "file": "Python-3.12.7-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.12.7/LICENSE",
+    "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+    "bytes": 13936
+  },
+  {
+    "file": "Python-3.12.7-third-party-notices.rst",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.12.7/Doc/license.rst",
+    "sha256": "bad93f2d7f71f6729b12cf0080951ace371acaf5e3fd6835118d53cd4bfd9120",
+    "bytes": 53905
+  },
+  {
+    "file": "OpenSSL-3.0.15-Apache-2.0.txt",
+    "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.15/LICENSE.txt",
+    "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+    "bytes": 10175
+  },
+  {
+    "file": "libffi-3.4.4-MIT.txt",
+    "url": "https://raw.githubusercontent.com/libffi/libffi/v3.4.4/LICENSE",
+    "sha256": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388",
+    "bytes": 1132
+  },
+  {
+    "file": "Expat-2.6.3-MIT.txt",
+    "url": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_6_3/expat/COPYING",
+    "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+    "bytes": 1144
+  },
+  {
+    "file": "bzip2-1.0.8-LICENSE.txt",
+    "url": "https://sourceware.org/git/?p=bzip2.git;a=blob_plain;f=LICENSE;hb=bzip2-1.0.8",
+    "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3",
+    "bytes": 1896
+  },
+  {
+    "file": "xz-5.2.5-COPYING.txt",
+    "url": "https://raw.githubusercontent.com/tukaani-project/xz/v5.2.5/COPYING",
+    "sha256": "bcb02973ef6e87ea73d331b3a80df7748407f17efdb784b61b47e0e610d3bb5c",
+    "bytes": 2775
+  },
+  {
+    "file": "Python-3.12.7-external-dependencies.bat",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.12.7/PCbuild/get_externals.bat",
+    "sha256": "680800f5f66e7064e5b6c3ae662c90730be6d8630ee674bb20239d15a7995b1e",
+    "bytes": 4389
+  },
+  {
+    "file": "mpdecimal-2.5.1-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.12.7/Doc/license.rst",
+    "derivedFrom": "libmpdec section, indentation removed",
+    "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+    "bytes": 1284
+  }
+]

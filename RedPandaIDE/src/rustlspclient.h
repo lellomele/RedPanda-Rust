@@ -24,11 +24,16 @@ public:
     int updateDocument(const QString &path,const QString &text);
     void closeDocument(const QString &path);
     void savedDocument(const QString &path);
-    int requestAt(const QString &method,const QString &path,int line,int character);
+    int requestAt(const QString &method,const QString &path,int line,int character,const QJsonObject &extra={});
+    int requestDocument(const QString &method,const QString &path,const QJsonObject &extra={});
+    int requestWorkspace(const QString &method,const QJsonObject &params);
+    bool synchronizeAll();
     int resolveCompletion(const QString &path,const QJsonObject &item);
     void cancel(int id);
     void restart();
+    void setSuspended(bool suspended);
     bool ready() const { return mReady; }
+    bool analysisReady()const{return mReady&&mQuiescent;}
     int version(const QString &path) const;
     static QString uri(const QString &path);
 signals:
@@ -58,7 +63,7 @@ private:
     bool prepareJob();
     void releaseJob();
     QProcess mProcess,mProbe;
-    QTimer mWatchdog,mRestart,mFlush,mConfiguration,mParse;
+    QTimer mWatchdog,mRestart,mFlush,mConfiguration,mParse,mIdle;
     QHash<QString,Document> mDocuments;
     QHash<int,Request> mRequests;
     QElapsedTimer mClock,mFailuresWindow;
@@ -66,9 +71,11 @@ private:
     QString mSysroot;
     QJsonArray mCfg;
     QJsonObject mLastConfiguration;
-    int mNextId=1,mFailures=0;
+    int mNextId=1,mFailures=0,mNextDocumentVersion=1;
     qint64 mExpected=-1,mProbeDeadline=0;
     bool mReady=false,mStarting=false,mStopping=false,mRecovering=false;
+    bool mQuiescent=false;
+    bool mSuspended=false;
 #ifdef Q_OS_WIN
     HANDLE mJob=nullptr;
     STARTUPINFOEXW mStartup{};

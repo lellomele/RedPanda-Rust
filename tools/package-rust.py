@@ -49,7 +49,7 @@ def copy_notices(payload, build):
     if plugin.is_file() and digest(plugin)==digest(module):component='qt6-base'
    if component is None:raise RuntimeError('License mapping required for distributed DLL '+str(module))
   elif name=='astyle.exe':component='astyle'
-  elif name in ('redpandarust.exe','redpandaide.exe','redpandaide-core.exe','consolepauser.exe','redpanda-win-git-askpass.exe'):component='redpanda'
+  elif name in ('redpandarust.exe','redpandaide.exe','redpandaide-core.exe','consolepauser.exe','redpanda-win-git-askpass.exe','rust-console-bridge.exe'):component='redpanda'
   elif module.suffix.casefold()=='.exe':raise RuntimeError('License mapping required for distributed EXE '+str(module))
   elif name.startswith('qt') and name.endswith('.qm'):component='qt6-translations'
   if component:components.setdefault(component,[]).append(module.relative_to(payload).as_posix())
@@ -57,7 +57,7 @@ def copy_notices(payload, build):
   destination=license_root/component
   if component=='redpanda':
    destination.mkdir(exist_ok=True);shutil.copy2(app/'LICENSE',destination/'LICENSE')
-   origins[component]='https://github.com/lellomele/RedPanda-CPP'
+   origins[component]='https://github.com/lellomele/RedPanda-Rust'
   elif component=='astyle':
    result=subprocess.run([str(app/'astyle.exe'),'--version'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                          creationflags=subprocess.CREATE_NO_WINDOW,timeout=10,check=True)
@@ -111,13 +111,16 @@ stage=args.output.parent/(args.output.name+'-staging')
 if stage.exists():raise RuntimeError('Staging already exists: '+str(stage))
 stage.mkdir(parents=True)
 try:
-    for name in ('RedPandaRust.exe','README.md','LICENSE','FORK_NOTICE.txt','qt.conf'):
+    for name in ('RedPandaRust.exe','README.md','ATTRIBUTIONS.md','LICENSE','FORK_NOTICE.txt','qt.conf'):
         shutil.copy2(args.installed/name,stage/name)
     (stage/'config').mkdir()
+    for helper in ('rust-console-bridge.exe','redpanda-win-git-askpass.exe'):
+        if not (args.installed/helper).is_file():raise RuntimeError('Required helper missing: '+helper)
+        shutil.copy2(args.installed/helper,stage/helper)
     shutil.copy2(source/'RedPandaIDE/resources/appicon/red-panda-rust.ico',stage/'red-panda-rust.ico')
     shutil.copy2(source/'RedPandaIDE/resources/appicon/red-panda-rust.png',stage/'red-panda-rust.png')
     subprocess.run([str(sdk/'bin/windeployqt.exe'),'--dir',str(stage),'--compiler-runtime','--no-translations',str(stage/'RedPandaRust.exe')],env=env,check=True)
-    queue=list(stage.rglob('*.dll'))+[stage/'RedPandaRust.exe'];seen=set();extra=[];system=Path(os.environ['SystemRoot'])/'System32'
+    queue=list(stage.rglob('*.dll'))+list(stage.glob('*.exe'));seen=set();extra=[];system=Path(os.environ['SystemRoot'])/'System32'
     while queue:
         module=queue.pop()
         if str(module).casefold() in seen:continue

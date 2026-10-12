@@ -65,7 +65,9 @@ Settings::Settings(const QString &filename):
 
 void Settings::load()
 {
-    mCompilerSets.loadSets();
+    // Rust tools are configured independently. Loading C/C++ sets on a fresh
+    // profile opens a compiler-discovery confirmation before the IDE appears.
+    if(QCoreApplication::applicationName()!=QStringLiteral("RedPandaRust"))mCompilerSets.loadSets();
     mEnvironment.load();
     mEditor.load();
     mExecutor.load();

@@ -33,6 +33,8 @@ QJsonArray BreakpointModel::toJson(const QString& projectFolder)
             obj["filename"]=breakpoint->filename;
         obj["line"]=breakpoint->line;
         obj["condition"]=breakpoint->condition;
+        obj["hit_condition"]=breakpoint->hitCondition;
+        obj["log_message"]=breakpoint->logMessage;
         obj["enabled"]=breakpoint->enabled;
         obj["breakpoint_type"] = static_cast<int>(breakpoint->breakpointType);
         obj["timestamp"]=QString("%1").arg(breakpoint->timestamp);
@@ -322,6 +324,8 @@ QList<PBreakpoint> BreakpointModel::loadJson(const QJsonArray& jsonArray, qint64
             breakpoint->filename = obj["filename"].toString();
             breakpoint->line = obj["line"].toInt();
             breakpoint->condition = obj["condition"].toString();
+            breakpoint->hitCondition = obj["hit_condition"].toString();
+            breakpoint->logMessage = obj["log_message"].toString();
             breakpoint->enabled = obj["enabled"].toBool();
             breakpoint->breakpointType = static_cast<BreakpointType>(obj["breakpoint_type"].toInt());
             breakpoint->timestamp = timestamp;

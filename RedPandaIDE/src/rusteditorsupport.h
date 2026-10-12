@@ -23,9 +23,11 @@ signals:
 private:
     bool eventFilter(QObject *watched,QEvent *event) override;
     bool isRust() const;
+    void detach();
     bool synchronize();
     void dismiss();
     void hover();
+    void signatureHelp();
     void receive(int id,const QString &method,const QString &path,int version,const QJsonValue &value);
     void showCompletions(const QJsonValue &value);
     void acceptCompletion();
@@ -34,11 +36,13 @@ private:
     Editor *mEditor;
     QPointer<RustLspClient> mClient;
     QListWidget *mPopup;
-    QTimer mSync,mComplete,mHover;
+    QTimer mSync,mComplete,mHover,mSignature;
     QString mPath;
     QJsonArray mItems;
     QJsonObject mSelected;
-    int mVersion=0,mCompletionId=0,mHoverId=0,mDefinitionId=0,mResolveId=0;
+    int mVersion=0,mCompletionId=0,mHoverId=0,mDefinitionId=0,mResolveId=0,mSignatureId=0;
+    quint64 mSignatureRevision=0;
+    QPoint mSignatureCaret;
     quint64 mRevision=0,mSyncedRevision=0,mCompletionRevision=0,mHoverRevision=0,mDefinitionRevision=0;
     int mCompletionLine=0,mCompletionCharacter=0,mDefinitionLine=0,mDefinitionCharacter=0;
     QPoint mHoverPosition,mRequestedHover;

@@ -1,0 +1,25 @@
+{
+  "version": "0.3.0",
+  "binarySha256": "706cc30eb96082b43e4c89f47e8885b7eba4d424c873ff7df3b935e84587b88a",
+  "qt": "6.11.2",
+  "rust": "1.98.0",
+  "rustAnalyzer": "1.98.0",
+  "codeLLDB": "1.12.3 (external)",
+  "unitIntegrationSuites": 32,
+  "failedSuites": 0,
+  "guiChecks": 142,
+  "failedGuiChecks": 0,
+  "largeFileOpenCloseCycles": 100,
+  "nativeWindowsPackageOpenCloseRuns": 3,
+  "nativeWindowReadySeconds": [
+    1.438,
+    1.331,
+    1.44
+  ],
+  "originalRustFileSha256": "163324b066ea374a7ac4e2bdbaed5f5fcda7190b79a76166be6a8777c6952019",
+  "originalRustFileUnchanged": true,
+  "sdkAbsentFromRuntimePath": true,
+  "productionBuildUiChecks": false,
+  "defenderExitCode": 0,
+  "github": "https://github.com/lellomele/RedPanda-Rust"
+}

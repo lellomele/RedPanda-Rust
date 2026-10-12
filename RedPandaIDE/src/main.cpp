@@ -434,6 +434,7 @@ int main(int argc, char *argv[])
         app.processEvents(QEventLoop::ExcludeUserInputEvents);
         if (!uiTestOutput.isEmpty()) splash.grab().save(uiTestOutput + "/startup.png");
         MainWindow mainWindow;
+        if(!uiTestOutput.isEmpty())qInfo()<<"RUST_QA main window constructed";
         pMainWindow = &mainWindow;
         SessionRecovery recovery(&mainWindow);
         QObject::connect(&app, &ResilientApplication::recoverableError, &mainWindow, [&mainWindow, &recovery](const QString &reason) {
@@ -446,6 +447,7 @@ int main(int argc, char *argv[])
             setScreenDPI(mainWindow.screen()->logicalDotsPerInch());
 
         mainWindow.show();
+        if(!uiTestOutput.isEmpty())qInfo()<<"RUST_QA main window shown";
         // Nonblocking: the IDE is already usable; clicking also dismisses the splash.
         QTimer::singleShot(uiTestOutput.isEmpty() ? 700 : 0, &splash, [&splash, &mainWindow] { splash.finish(&mainWindow); });
 
@@ -472,9 +474,11 @@ int main(int argc, char *argv[])
         }
 
         recovery.restorePreviousSessions();
+        if(!uiTestOutput.isEmpty())qInfo()<<"RUST_QA session restored";
 
         //reset default open folder
         mainWindow.setFilesViewRoot(pSettings->environment().currentFolder());
+        if(!uiTestOutput.isEmpty())qInfo()<<"RUST_QA files root configured";
 
 #ifdef Q_OS_WIN
         WindowLogoutEventFilter filter;

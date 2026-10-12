@@ -1,6 +1,7 @@
 // Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "rusteditorsupport.h"
+#include "rustsnippet.h"
 #include "editor.h"
 #include "settings.h"
 #include "settings/codecompletionsettings.h"
@@ -43,26 +44,30 @@ RustEditorSupport::RustEditorSupport(Editor *editor,RustLspClient *client):QObje
     mSync.setSingleShot(true);mSync.setInterval(180);
     mComplete.setSingleShot(true);mComplete.setInterval(250);
     mHover.setSingleShot(true);mHover.setInterval(500);
+    mSignature.setSingleShot(true);mSignature.setInterval(200);
     editor->installEventFilter(this);editor->viewport()->installEventFilter(this);
     connect(&mSync,&QTimer::timeout,this,[this]{synchronize();});
     connect(&mComplete,&QTimer::timeout,this,[this]{complete(false);});
     connect(&mHover,&QTimer::timeout,this,&RustEditorSupport::hover);
+    connect(&mSignature,&QTimer::timeout,this,&RustEditorSupport::signatureHelp);
     connect(mPopup,&QListWidget::itemClicked,this,[this]{acceptCompletion();});
     connect(editor,&QSynedit::QSynEdit::changed,this,[this]{
         ++mRevision;dismiss();QToolTip::hideText();mHover.stop();
         if(mClient){mClient->cancel(mHoverId);mClient->cancel(mDefinitionId);}
+        if(mClient)mClient->cancel(mSignatureId);mSignatureId=0;mSignature.stop();
         mHoverId=mDefinitionId=0;
         if(isRust()){
             mEditor->clearSyntaxIssues();mEditor->invalidate();mSync.start();
             if(!mApplying&&mEditor->hasFocus())mComplete.start();
+            const auto prefix=mEditor->lineText().left(mEditor->caretX());if(prefix.endsWith('(')||prefix.endsWith(','))mSignature.start();
         }else if(mClient&&!mPath.isEmpty()){mClient->closeDocument(mPath);mPath.clear();}
     });
     connect(editor,&Editor::rustCompletionRequested,this,[this]{complete();});
     connect(editor,&Editor::fileSaved,this,[this]{if(synchronize()&&mClient)mClient->savedDocument(mPath);});
     connect(editor,&Editor::fileRenamed,this,[this]{synchronize();});
     connect(editor,&Editor::fileSaveAsed,this,[this]{synchronize();});
-    connect(editor,&Editor::closeOccured,this,[this]{dismiss();mSync.stop();mComplete.stop();mHover.stop();
-        if(mClient&&!mPath.isEmpty())mClient->closeDocument(mPath);mPath.clear();});
+    connect(editor,&Editor::closeOccured,this,[this]{detach();});
+    connect(editor,&Editor::aboutToDestroy,this,[this]{detach();},Qt::DirectConnection);
     connect(client,&RustLspClient::result,this,&RustEditorSupport::receive);
     connect(client,&RustLspClient::diagnostics,this,&RustEditorSupport::applyDiagnostics);
     connect(client,&RustLspClient::readyChanged,this,[this](bool ready){
@@ -71,11 +76,20 @@ RustEditorSupport::RustEditorSupport(Editor *editor,RustLspClient *client):QObje
     });
     mSync.start(0);
 }
-RustEditorSupport::~RustEditorSupport(){if(mClient&&!mPath.isEmpty())mClient->closeDocument(mPath);}
-bool RustEditorSupport::isRust()const{return mEditor->syntaxer()&&mEditor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust;}
+RustEditorSupport::~RustEditorSupport(){detach();}
+void RustEditorSupport::detach(){
+    if(!mEditor)return;
+    mEditor->removeEventFilter(this);mEditor->viewport()->removeEventFilter(this);
+    disconnect(mEditor,nullptr,this,nullptr);
+    if(mClient)disconnect(mClient,nullptr,this,nullptr);
+    mSync.stop();mComplete.stop();mHover.stop();mSignature.stop();dismiss();QToolTip::hideText();
+    if(mClient&&!mPath.isEmpty())mClient->closeDocument(mPath);
+    mPath.clear();mEditor=nullptr;
+}
+bool RustEditorSupport::isRust()const{return mEditor&&mEditor->syntaxer()&&mEditor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust;}
 bool RustEditorSupport::synchronize(){
     mSync.stop();
-    if(!mClient)return false;
+    if(!mClient||!mEditor)return false;
     if(!isRust()||mEditor->isNew()){
         if(!mPath.isEmpty())mClient->closeDocument(mPath);mPath.clear();mVersion=0;return false;
     }
@@ -161,6 +175,11 @@ bool RustEditorSupport::eventFilter(QObject *watched,QEvent *event){
     }
     return false;
 }
+void RustEditorSupport::signatureHelp(){
+    if(!isRust()||!mClient||!mEditor->hasFocus()||!synchronize()||!mClient->ready())return;
+    const auto caret=mEditor->caretXY();mSignatureRevision=mRevision;mSignatureCaret={caret.ch,caret.line};
+    mSignatureId=mClient->requestAt("textDocument/signatureHelp",mPath,caret.line,caret.ch);
+}
 void RustEditorSupport::receive(int id,const QString &method,const QString &path,int version,const QJsonValue &value){
     if(!isRust()||path!=QFileInfo(mPath).absoluteFilePath()||version!=mVersion)return;
     if(id==mCompletionId&&method=="textDocument/completion"){
@@ -174,6 +193,13 @@ void RustEditorSupport::receive(int id,const QString &method,const QString &path
         if(mRevision!=mHoverRevision||mHoverPosition!=mRequestedHover||!mEditor->isVisible()||mPopup->isVisible())return;
         const auto text=contentText(value.toObject().value("contents")).left(16000);
         if(!text.isEmpty())QToolTip::showText(mEditor->mapToGlobal(mRequestedHover),"<pre>"+text.toHtmlEscaped()+"</pre>",mEditor,{},15000);
+    }else if(id==mSignatureId&&method=="textDocument/signatureHelp"){
+        mSignatureId=0;if(mRevision!=mSignatureRevision||mEditor->caretX()!=mSignatureCaret.x()||mEditor->caretY()!=mSignatureCaret.y()||!mEditor->hasFocus())return;
+        const auto signatures=value.toObject().value("signatures").toArray();if(signatures.isEmpty())return;
+        const auto index=std::clamp(value.toObject().value("activeSignature").toInt(),0,int(signatures.size())-1);
+        const auto signature=signatures[index].toObject();const auto contents=signature.value("label").toString()+"\n"+contentText(signature.value("documentation"));
+        const auto point=mEditor->displayCoordToPixels(mEditor->bufferToDisplayPos(mEditor->caretXY()));
+        QToolTip::showText(mEditor->mapToGlobal(point+QPoint(0,mEditor->textHeight())),"<pre>"+contents.left(8000).toHtmlEscaped()+"</pre>",mEditor,{},15000);
     }else if(id==mDefinitionId&&method=="textDocument/definition"){
         mDefinitionId=0;
         if(mRevision!=mDefinitionRevision||mEditor->caretY()!=mDefinitionLine||mEditor->caretX()!=mDefinitionCharacter||!mEditor->hasFocus())return;
@@ -190,7 +216,12 @@ void RustEditorSupport::showCompletions(const QJsonValue &value){
     mItems={};mPopup->clear();
     for(const auto &entry:entries){
         const auto item=entry.toObject();const auto label=item.value("label").toString();if(label.isEmpty())continue;
-        if(item.value("insertTextFormat").toInt(1)!=1)continue; // No unsupported snippet placeholders.
+        const auto format=item.value("insertTextFormat").toInt(1);
+        if(format!=1&&format!=2)continue;
+        if(format==2){
+            const auto templateText=item.value("textEdit").toObject().value("newText").toString(item.value("insertText").toString());
+            if(!RustSnippet::expand(templateText).valid)continue;
+        }
         mItems.append(item);auto *row=new QListWidgetItem(label.left(300),mPopup);
         row->setToolTip("<pre>"+(item.value("detail").toString()+"\n"+contentText(item.value("documentation"))).left(4000).toHtmlEscaped()+"</pre>");
         if(mItems.size()>=250)break;
@@ -219,7 +250,7 @@ void RustEditorSupport::acceptCompletion(){
 }
 void RustEditorSupport::applyCompletion(const QJsonObject &item){
     if(mRevision!=mCompletionRevision||mEditor->readOnly()||mEditor->selAvail()||!mEditor->hasFocus()||
-        mEditor->caretY()!=mCompletionLine||mEditor->caretX()!=mCompletionCharacter||item.value("insertTextFormat").toInt(1)!=1||item.value("label").toString().isEmpty()){dismiss();return;}
+        mEditor->caretY()!=mCompletionLine||mEditor->caretX()!=mCompletionCharacter||item.value("label").toString().isEmpty()){dismiss();return;}
     struct Edit { QSynedit::CharPos begin,end; QString text; qsizetype start,finish; bool primary=false; };
     QVector<Edit> edits;const auto before=normalizedText(mEditor);const auto lines=before.split('\n');
     QVector<qsizetype> offsets;qsizetype offset=0;for(const auto &line:lines){offsets.append(offset);offset+=line.size()+1;}
@@ -239,6 +270,13 @@ void RustEditorSupport::applyCompletion(const QJsonObject &item){
             {"end",QJsonObject{{"line",mCompletionLine},{"character",mCompletionCharacter}}}}},
             {"newText",item.value("insertText").toString(item.value("label").toString())}};
     }
+    QString editorTemplate;
+    const auto format=item.value("insertTextFormat").toInt(1);
+    if(format==2){
+        const auto expansion=RustSnippet::expand(primary.value("newText").toString());
+        if(!expansion.valid){dismiss();return;}
+        primary.insert("newText",expansion.text);editorTemplate=expansion.editorSnippet;
+    }else if(format!=1){dismiss();return;}
     if(!add(primary,true)){dismiss();return;}
     const auto requestOffset=offsets[mCompletionLine]+mCompletionCharacter;
     if(edits.first().start>requestOffset||edits.first().finish<requestOffset){dismiss();return;}
@@ -250,14 +288,19 @@ void RustEditorSupport::applyCompletion(const QJsonObject &item){
     qsizetype finalSize=before.size();
     for(const auto &edit:edits)finalSize+=edit.text.size()-(edit.finish-edit.start);
     if(finalSize>4*1024*1024){dismiss();return;}
-    qsizetype cursor=0,primaryStart=0;for(const auto &edit:edits)if(edit.primary){primaryStart=edit.start;cursor=edit.start+edit.text.size();}
-    for(const auto &edit:edits)if(!edit.primary&&edit.finish<=primaryStart)cursor+=edit.text.size()-(edit.finish-edit.start);
+    Edit primaryEdit{};for(const auto &edit:edits)if(edit.primary)primaryEdit=edit;
+    qsizetype start=primaryEdit.start,finish=primaryEdit.finish;
+    for(const auto &edit:edits)if(!edit.primary&&edit.finish<=primaryEdit.start){const auto delta=edit.text.size()-(edit.finish-edit.start);start+=delta;finish+=delta;}
     // Validate every edit against the same snapshot before entering a single undo group.
-    dismiss();mApplying=true;mEditor->beginEditing();
-    for(const auto &edit:edits){mEditor->setCaretAndSelection(edit.begin,edit.begin,edit.end);mEditor->setSelText(edit.text);}
-    const auto after=normalizedText(mEditor);cursor=std::clamp<qsizetype>(cursor,0,after.size());
-    const auto preceding=after.left(cursor);const auto line=preceding.count('\n');const auto last=preceding.lastIndexOf('\n');
-    mEditor->setCaretXY({int(cursor-(last+1)),int(line)});mEditor->endEditing();mApplying=false;
+    dismiss();mApplying=true;
+    {
+        mEditor->beginEditing();const auto cleanup=finally([this]{mEditor->endEditing();mApplying=false;});
+        for(const auto &edit:edits)if(!edit.primary){mEditor->setCaretAndSelection(edit.begin,edit.begin,edit.end);mEditor->setSelText(edit.text);}
+        const auto text=normalizedText(mEditor);
+        const auto at=[&](qsizetype offset){const auto prefix=text.left(offset);return QSynedit::CharPos{int(offset-prefix.lastIndexOf('\n')-1),int(prefix.count('\n'))};};
+        const auto begin=at(start),end=at(finish);mEditor->setCaretAndSelection(begin,begin,end);
+        if(format==2)mEditor->insertCodeSnippet(editorTemplate);else mEditor->setSelText(primaryEdit.text);
+    }
     synchronize();
 }
 void RustEditorSupport::applyDiagnostics(const QString &path,int version,const QJsonArray &items){

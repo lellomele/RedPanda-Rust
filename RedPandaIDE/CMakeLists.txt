@@ -2,8 +2,12 @@
 # RedPandaIDE #
 
 add_executable(RedPandaIDE WIN32)
+if(WIN32)
+    add_custom_command(TARGET RedPandaIDE POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rust-console-bridge> $<TARGET_FILE_DIR:RedPandaIDE>)
+endif()
 set_target_properties(RedPandaIDE PROPERTIES OUTPUT_NAME RedPandaRust)
 target_sources(RedPandaIDE PRIVATE src/mainwindowrust.cpp)
+target_sources(RedPandaIDE PRIVATE src/rustcleanplan.cpp src/rustcleandialog.cpp src/rustcleandialog.h)
 option(REDPANDA_UI_CHECKS "Include development UI checks in the IDE executable" OFF)
 if(REDPANDA_UI_CHECKS)
     target_sources(RedPandaIDE PRIVATE src/rustuichecks.cpp)
@@ -19,8 +23,16 @@ target_qt_plain_cpp(RedPandaIDE
     src/diagnosticcatalog
     src/sessionstore
     src/rusttools
+    src/rustprojectoptions
+    src/rusttextedits
+    src/rustnavigation
+    src/rustprojectdialog
     src/rustlspclient
     src/rusteditorsupport
+    src/rustterminal
+    src/rustdebugsession
+    src/rustdebugpanel
+    src/rustsnippet
     src/colorscheme
     src/customfileiconprovider
     src/projectoptions

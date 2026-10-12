@@ -1,31 +1,51 @@
 # Red Panda Rust
 
-IDE desktop per Rust derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit originali.
+IDE desktop per Rust derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit. Include compilazione, esecuzione, test, formattazione, analisi semantica, completamento, refactoring, debug e Git.
 
-## Installazione e uso
+## Installazione
 
-Estrarre il pacchetto Windows e avviare `RedPandaRust.exe`. Rust e Cargo devono essere installati tramite rustup; la IDE cerca Cargo anche in `%USERPROFILE%\.cargo\bin` e `$CARGO_HOME/bin`.
+Su Windows estrarre il pacchetto e avviare **RedPandaRust.exe**. Qt e le librerie dell'interfaccia sono inclusi. Le preferenze portabili e il recupero dei documenti risiedono nella cartella `config` accanto all'eseguibile; conservarla durante gli aggiornamenti.
 
-Per un file singolo, aprire o salvare un `.rs` e usare Compila, Controlla o Esegui: la IDE usa direttamente `rustc`, senza richiedere `Cargo.toml`. I binari vengono creati in una cartella temporanea separata dai sorgenti. Sono disponibili anche test e formattazione del file.
+Installare una toolchain Rust funzionante tramite [rustup](https://rustup.rs), con il linker MSVC o GNU corrispondente. Aggiungere i componenti:
 
-I file singoli usano per impostazione predefinita l’edizione Rust 2024, che richiede Rust 1.85 o successivo. L’edizione e i percorsi di Cargo, rustc e rustfmt sono configurabili in **Strumenti → Opzioni → Rust → Strumenti del compilatore**. Lasciare i percorsi vuoti per il rilevamento automatico; **Verifica strumenti** mostra le versioni disponibili. Per dipendenze esterne e Clippy usare un progetto Cargo.
+```text
+rustup component add rust-analyzer rust-src rustfmt clippy
+```
 
-Per un progetto, aprire `Cargo.toml` dal menu **File → Apri progetto Cargo**, oppure creare un progetto con **Nuovo progetto Rust**. La IDE usa Cargo automaticamente per i `.rs` appartenenti a un progetto. Sono disponibili compilazione, controllo, esecuzione, test, Clippy e formattazione. Le diagnostiche appaiono nella tabella originale della IDE; la console accetta input e consente di interrompere il programma.
+Per il debug installare [CodeLLDB 1.12.3](https://github.com/vadimcn/codelldb/releases/tag/v1.12.3), anche come estensione di Visual Studio Code. Gli strumenti Rust e CodeLLDB sono esterni alla distribuzione. La IDE rileva `%USERPROFILE%\.cargo\bin`, `$CARGO_HOME/bin`, PATH e CodeLLDB nelle estensioni di VS Code. I percorsi, il debugger e l'edizione dei file singoli si configurano in **Strumenti → Opzioni → Rust → Strumenti del compilatore**. **Verifica strumenti** mostra le versioni rilevate.
 
-## Analisi e completamento Rust
+## Uso
 
-Installare i componenti con `rustup component add rust-analyzer rust-src`. Aprendo un file Rust salvato, rust-analyzer analizza anche il testo non ancora salvato: gli errori sono segnalati nell’editor e passando il mouse sui simboli vengono mostrati tipi e documentazione. Il completamento si apre durante la digitazione o con **Ctrl+Spazio**; scegliere con le frecce e confermare con **Invio** o **Tab**, oppure chiudere con **Esc**. Le modifiche del completamento, incluse eventuali importazioni nello stesso documento, sono annullabili con **Ctrl+Z**. **F12** apre la definizione del simbolo.
+- **File singolo:** aprire o salvare un `.rs`, quindi Compila, Controlla, Esegui o Avvia debug Rust. Viene usato `rustc`, senza richiedere `Cargo.toml`; gli output risiedono in una cartella temporanea. Sono disponibili anche test, rustfmt, assembly e IR LLVM.
+- **Progetto Cargo:** aprire `Cargo.toml` con **File → Apri progetto Cargo**, oppure creare un progetto Rust. Sono disponibili build, check, run, test, Clippy, fmt, documentazione, benchmark e download delle dipendenze.
+- **Opzioni progetto/file:** selezionare profilo Debug/Release, package, target, feature, piattaforma, argomenti, ambiente e cartella di esecuzione. Per un file singolo si applicano le opzioni rustc, profilo, piattaforma e parametri di esecuzione.
+- **Analisi:** rust-analyzer legge anche le modifiche non salvate. **Ctrl+Spazio** apre il completamento; Invio/Tab confermano, Esc chiude, **F12** apre la definizione. Il menu Refactoring offre riferimenti, rinomina con anteprima, azioni Rust ed espansione delle macro; il pannello Struttura mostra i simboli. I suggerimenti sulle chiamate mostrano firma e documentazione.
+- **Snippet e template:** **Ctrl+Alt+Spazio** inserisce uno snippet Rust e Tab passa tra i campi. Le raccolte e il template Rust sono modificabili nelle preferenze dell'editor.
+- **Debug:** impostare breakpoint nel margine e avviare il debug. Il pannello Rust offre thread, stack, variabili, watch, modifica dei valori, input del programma, memoria, disassemblato e comandi LLDB. Sono disponibili passi, continua, pausa, esecuzione fino al cursore, breakpoint condizionali, hit condition, logpoint, breakpoint sulle funzioni e watchpoint sulle variabili supportate dal debugger.
+- **Git:** configurare Git nelle preferenze Strumenti. Il menu permette repository, staging, commit, branch, merge, cronologia, remoti, fetch, pull e push. Git deve essere installato separatamente.
 
-Sono supportati progetti Cargo e file `.rs` singoli, senza creare `Cargo.toml`. I file nuovi devono essere salvati una prima volta. Il percorso di rust-analyzer è configurabile in **Strumenti → Opzioni → Rust → Strumenti del compilatore**; dopo aver cambiato toolchain, percorsi o edizione dei file singoli usare **Strumenti → Riavvia rust-analyzer**. La barra di stato segnala avvio, indicizzazione ed errori. L’indicizzazione iniziale di progetti grandi può richiedere tempo. Se il server si arresta, la IDE prova a riavviarlo con un’attesa progressiva e sospende i tentativi dopo tre errori ravvicinati; si può continuare a modificare e compilare anche quando l’analisi non è disponibile.
+Le diagnostiche del compilatore sono navigabili nel pannello Problemi; la console accetta input e permette di interrompere i processi. **Progetto Rust → Pulisci artefatti Cargo** mostra la cartella effettiva e sposta gli artefatti nel Cestino dopo conferma; rifiuta cartelle con sorgenti, documenti aperti o collegamenti e cambiamenti successivi all'anteprima. Il recupero periodico si configura nelle preferenze Interfaccia e area di lavoro.
 
 ## Requisiti e limiti
 
-Windows 10/11 x64; toolchain Rust funzionante (MSVC con gli strumenti C++ Microsoft, oppure GNU con il relativo linker). I progetti multi-pacchetto usano le impostazioni predefinite di Cargo; la selezione di target, features e argomenti non è ancora disponibile. Il debugger Rust non è integrato in questa anteprima. L’analisi semantica richiede rust-analyzer e, per la libreria standard, rust-src; toolchain e componenti sono installati separatamente tramite rustup. Sono analizzati fino a 128 documenti, con massimo 8 MiB di testo UTF-16 per documento e 64 MiB complessivi; il limite non impedisce di aprire o compilare file più grandi. Non sono supportati snippet LSP, refactoring o modifiche automatiche su più file. Le diagnostiche di rust-analyzer sono separate dalla tabella dei risultati di compilazione; i controlli Cargo si eseguono con Compila/Controlla. La formattazione modifica i file salvati tramite Cargo/rustfmt e viene rilevata dal controllo delle modifiche esterne della IDE. Output massimo 16 MiB per comando e 10.000 righe nella console. La console non è un emulatore di terminale.
+Windows 10 versione 1809 o successiva, oppure Windows 11, x64; Rust 1.85+ per l'edizione 2024. La distribuzione Windows è verificata con Qt 6.11.2, Rust/rust-analyzer 1.98.0 e CodeLLDB 1.12.3. La compilazione Linux conserva le risorse desktop, ma non è stata verificata per questa distribuzione.
+
+L'indicizzazione iniziale può richiedere tempo. Se rust-analyzer si arresta, la IDE effettua tentativi di riavvio limitati; **Strumenti → Riavvia rust-analyzer** consente di riprovare. Sono analizzati fino a 128 documenti, 8 MiB di testo UTF-16 per documento e 64 MiB complessivi; questi limiti non impediscono di aprire o compilare file più grandi. Le diagnostiche del server sono nell'editor; build/check si eseguono esplicitamente.
+
+Rinomina e azioni modificano i buffer con anteprima e annullamento; il salvataggio resta esplicito. Le operazioni LSP che creano, rinominano o eliminano file e i comandi arbitrari del server sono rifiutati. Gli snippet LSP supportano campi semplici, valori predefiniti e scelte; trasformazioni, campi annidati e riferimenti ripetuti non sono espansi. La formattazione usa Cargo/rustfmt sui file salvati.
+
+Output massimo 16 MiB per comando e 10.000 righe nella console. L'ispezione delle variabili avviene a pagine di 200 elementi, fino a 20.000 per contenitore; la cache è limitata a 32 MiB. La console di esecuzione non è un emulatore di terminale; il debugger Windows usa ConPTY. Per Rust si usano i test Cargo/rustc; i pannelli per gare C/C++ non sono esposti.
 
 ## Compilazione
 
-Richiede CMake, Ninja, C++17 e Qt 6.8+ (Core, Concurrent, Gui, LinguistTools, Network, PrintSupport, Svg, Test, Widgets, Xml). Eseguire `tools/build-rust-windows.ps1 -QtRoot <kit-Qt> -CompilerRoot <MinGW>`. Il kit Qt e MinGW devono essere compatibili. La distribuzione delle DLL e delle relative licenze è completata da `tools/package-rust.py`.
+Richiede CMake, Ninja, C++17 e un kit Qt 6.8+ compatibile con il compilatore C++. Componenti Qt: Core, Concurrent, Gui, LinguistTools, Network, PrintSupport, Svg, Test, Widgets, Xml.
+
+```powershell
+tools/build-rust-windows.ps1 -QtRoot <kit-Qt> -CompilerRoot <MinGW>
+```
+
+`tools/package-rust.py` completa DLL e licenze. Per eseguire i test configurare CMake con `BUILD_TESTING=ON`, compilare `all-test-targets` ed eseguire `ctest --output-on-failure`. Le prove del debugger richiedono CodeLLDB; `REDPANDA_TEST_CODELLDB` ne può indicare il percorso. `REDPANDA_UI_CHECKS=ON` abilita esclusivamente la build dedicata ai controlli grafici; i pacchetti di produzione lo disabilitano.
 
 ## Copyright
 
-Il codice originale RedPanda-CPP/QSynEdit è di Roy Qu (`royqh1979`) e dei contributori. Le modifiche del fork rmele e l’adattamento Rust recano **Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)**. GPL-3.0-or-later. La distinzione tra le parti e le licenze delle dipendenze è documentata in [ATTRIBUTIONS.md](ATTRIBUTIONS.md); gli avvisi originali sono conservati.
+Il codice originale RedPanda-CPP/QSynEdit è di Roy Qu (`royqh1979`) e dei contributori. Le modifiche del fork rmele e l'adattamento Rust recano **Copyright © 2026 Ing. prof. Raffaele Mele (lellomele@gmail.com)**. GPL-3.0-or-later. Provenienza, parti riutilizzate e dipendenze sono documentate in [ATTRIBUTIONS.md](ATTRIBUTIONS.md); gli avvisi originali sono conservati.

@@ -26,9 +26,14 @@ RustWorkspace::RustWorkspace(QObject *parent):QObject(parent){
         mStartTimer.stop();mFinishTimer.stop();drain();
         if(!mPending.isEmpty()){handleLine(mPending);mPending.clear();}
         releaseJob();
+        if(code!=0||status!=QProcess::NormalExit||mCancelled)mArtifacts.clear();
+        if(code==0&&status==QProcess::NormalExit&&!mCancelled&&!mExecuting&&mCommand=="run"&&mRunAfterBuild.isEmpty()){
+            if(mArtifacts.size()==1)mRunAfterBuild=mArtifacts.first();
+            else{emit output(tr("Selezionare un solo target eseguibile nelle opzioni Rust.\n"));emit busyChanged(false);emit finished(-1,false);return;}
+        }
         if(code==0 && status==QProcess::NormalExit && !mCancelled && !mRunAfterBuild.isEmpty()){
             const QString executable=mRunAfterBuild;mRunAfterBuild.clear();mDirectDiagnostics=false;
-            if(launch(executable,{},false))return;
+            mExecuting=true;if(launch(executable,mOptions.arguments,false))return;
             emit busyChanged(false);emit finished(-1,false);return;
         }
         mRunAfterBuild.clear();
@@ -73,7 +78,7 @@ void RustWorkspace::releaseJob(){
 }
 bool RustWorkspace::start(const QString &root,const QString &command,const QStringList &extra){
     if(busy())return false;
-    const QSet<QString> allowed={"build","check","run","test","clippy","fmt","new"};
+    const QSet<QString> allowed={"build","check","run","test","clippy","fmt","new","doc","bench","clean","fetch","asm","llvm","debug-test","debug-build"};
     if(!allowed.contains(command)){emit output(tr("Comando Cargo non valido.\n"));return false;}
     const QString cargo=findTool("cargo");
     if(cargo.isEmpty()){emit output(tr("Cargo non trovato. Installare Rust da rustup.rs.\n"));return false;}
@@ -81,20 +86,36 @@ bool RustWorkspace::start(const QString &root,const QString &command,const QStri
     if(!QFileInfo(mRoot).isDir()||(command!="new"&&!QFileInfo(QDir(mRoot).filePath("Cargo.toml")).isFile())){
         emit output(tr("Aprire un progetto contenente Cargo.toml.\n"));return false;
     }
-    mRunAfterBuild.clear();mDirectDiagnostics=false;
-    QStringList args{command};
+    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty())emit output(error+'\n');
+    if(command!="new"&&!mOptions.validate(mRoot,error)){emit output(error+'\n');return false;}
+    mExecuting=false;mRunAfterBuild.clear();mDirectDiagnostics=false;
+    mArtifacts.clear();
+    const auto actual=(command=="run"||command=="debug-build")?QString("build"):(command=="asm"||command=="llvm")?QString("rustc"):command=="debug-test"?QString("test"):command;
+    QStringList args{actual};
     if(command!="new")args<<"--manifest-path"<<QDir(mRoot).filePath("Cargo.toml");
-    if(command!="fmt"&&command!="new")args<<"--message-format=json";
+    const bool diagnostics=QStringList{"build","check","run","test","clippy","bench","doc","asm","llvm","debug-test","debug-build"}.contains(command);
+    if(diagnostics)args<<"--message-format=json";
+    if(command!="new")args<<mOptions.cargoArguments(command);
     args<<extra;
-    return launch(cargo,args,true);
+    if(command=="debug-test")args<<"--no-run";
+    if(command=="asm"||command=="llvm"){
+        mFileBuild=std::make_unique<QTemporaryDir>(QDir::tempPath()+"/redpanda-rust-generated-XXXXXX");
+        if(!mFileBuild->isValid()){emit output(tr("Impossibile creare la cartella degli output generati.\n"));return false;}
+        const auto path=mFileBuild->filePath(command=="asm"?"output.s":"output.ll");mArtifacts.append(path);
+        args<<"--"<<QString("--emit=%1=%2").arg(command=="asm"?"asm":"llvm-ir",path);
+    }
+    if((command=="test"||command=="bench")&&!mOptions.arguments.isEmpty())args<<"--"<<mOptions.arguments;
+    return launch(cargo,args,diagnostics);
 }
 bool RustWorkspace::launch(const QString &program,const QStringList &args,bool diagnostics){
     releaseJob();if(!prepareJob()){emit output(tr("Impossibile proteggere il processo e i processi figli.\n"));return false;}
     mBytes=0;mIssues=0;mPending.clear();mCancelled=false;mBuilding=diagnostics;mDecoder.resetState();
-    QProcessEnvironment environment=QProcessEnvironment::systemEnvironment();
+    QProcessEnvironment environment=mOptions.processEnvironment();
     environment.insert("PATH",QFileInfo(program).absolutePath()+QDir::listSeparator()+environment.value("PATH"));
     environment.insert("CARGO_TERM_COLOR","never");environment.insert("RUST_BACKTRACE","1");
-    mProcess.setProcessEnvironment(environment);mProcess.setWorkingDirectory(mRoot);
+    if(mCommand=="debug-build"||mCommand=="debug-test"){environment.insert("CARGO_PROFILE_RELEASE_DEBUG","2");environment.insert("CARGO_PROFILE_DEV_DEBUG","2");}
+    const auto rustc=findTool("rustc");if(!rustc.isEmpty())environment.insert("RUSTC",rustc);
+    mProcess.setProcessEnvironment(environment);mProcess.setWorkingDirectory(mExecuting?mOptions.runDirectory(mRoot):mRoot);
     emit output(QFileInfo(program).fileName()+" "+args.join(' ')+"\n");
     mProcess.start(program,args);mStartTimer.start();emit busyChanged(true);return true;
 }
@@ -103,10 +124,14 @@ bool RustWorkspace::startFile(const QString &file,const QString &command){
     const QFileInfo source(file);
     if(!source.isFile()||source.suffix().compare("rs",Qt::CaseInsensitive)!=0){emit output(tr("Salvare prima il file Rust (.rs).\n"));return false;}
     if(command=="clippy"){emit output(tr("Clippy richiede un progetto Cargo; per un file singolo usare Controlla.\n"));return false;}
-    if(!QSet<QString>{"build","check","run","test","fmt"}.contains(command))return false;
+    if(!QSet<QString>{"build","check","run","test","fmt","asm","llvm","doc","debug-test","debug-build"}.contains(command))return false;
+    if(command=="doc"){emit output(tr("La documentazione richiede un progetto Cargo.\n"));return false;}
     const QString tool=findTool(command=="fmt"?"rustfmt":"rustc");
     if(tool.isEmpty()){emit output(tr("Strumento Rust non trovato: %1.\n").arg(command=="fmt"?"rustfmt":"rustc"));return false;}
     mRoot=source.absolutePath();mCommand=command;mRunAfterBuild.clear();mDirectDiagnostics=command!="fmt";
+    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty())emit output(error+'\n');
+    if(!mOptions.validate(mRoot,error)){emit output(error+'\n');return false;}mExecuting=false;
+    mArtifacts.clear();
     if(command=="fmt")return launch(tool,{"--edition",RustTools::edition(),source.absoluteFilePath()},false);
     mFileBuild=std::make_unique<QTemporaryDir>(QDir::tempPath()+"/redpanda-rust-file-XXXXXX");
     if(!mFileBuild->isValid()){emit output(tr("Impossibile creare la cartella temporanea di compilazione.\n"));return false;}
@@ -115,9 +140,14 @@ bool RustWorkspace::startFile(const QString &file,const QString &command){
 #else
     const QString executable=mFileBuild->filePath("program");
 #endif
-    QStringList args{source.absoluteFilePath(),"--crate-name","redpanda_file","--edition",RustTools::edition(),"--error-format=json","-g","-o",command=="check"?mFileBuild->filePath("program.rmeta"):executable};
+    if(command=="build"||command=="run"||command=="test"||command=="debug-test"||command=="debug-build")mArtifacts.append(executable);
+    const auto output=command=="check"?mFileBuild->filePath("program.rmeta"):command=="asm"?mFileBuild->filePath("program.s"):command=="llvm"?mFileBuild->filePath("program.ll"):executable;
+    QStringList args{source.absoluteFilePath(),"--crate-name","redpanda_file","--edition",RustTools::edition(),"--error-format=json","-g","-C",mOptions.release?"opt-level=3":"opt-level=0","-o",output};
+    if(!mOptions.targetTriple.isEmpty())args<<"--target"<<mOptions.targetTriple;
+    args<<mOptions.rustFlags;
     if(command=="check")args<<"--emit=metadata";
-    if(command=="test")args<<"--test";
+    if(command=="test"||command=="debug-test")args<<"--test";
+    if(command=="asm"||command=="llvm"){args<<QString("--emit=%1").arg(command=="asm"?"asm":"llvm-ir");mArtifacts.append(output);}
     if(command=="run"||command=="test")mRunAfterBuild=executable;
     return launch(tool,args,true);
 }
@@ -156,7 +186,12 @@ void RustWorkspace::handleLine(const QByteArray &line){
     if(mBuilding&&error.error==QJsonParseError::NoError&&json.isObject()){
         const auto record=json.object();const auto reason=record.value("reason").toString();
         if(reason=="build-finished"){mBuilding=false;return;}
-        if(reason=="compiler-artifact"||reason=="build-script-executed")return;
+        if(reason=="compiler-artifact"){
+            const auto executable=record.value("executable").toString();
+            if(mCommand!="asm"&&mCommand!="llvm"&&!executable.isEmpty()&&!mArtifacts.contains(executable))mArtifacts.append(executable);
+            return;
+        }
+        if(reason=="build-script-executed")return;
         if(reason=="compiler-message" || (mDirectDiagnostics && record.value("$message_type").toString()=="diagnostic")){
             const auto message=mDirectDiagnostics?record:record.value("message").toObject();
             emit output(message.value("rendered").toString(message.value("message").toString())+'\n');

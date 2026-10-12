@@ -24,7 +24,7 @@ endif()
 option(FORCE_QT5 "Force Qt 5 when building with system Qt" OFF)
 option(LUA_ADDON "Enable Lua add-ons" OFF)
 option(SDCC "Enable SDCC compiler support" ON)
-option(VCS "Enable Git integration" OFF)
+option(VCS "Enable Git integration" ON)
 option(WINDOWS_PREFER_OPENCONSOLE "Prefer OpenConsole.exe as terminal emulator" OFF)
 
 if (WIN32)
@@ -99,13 +99,8 @@ string(JSON APP_VERSION_MINOR GET ${VERSION_JSON} minor)
 string(JSON APP_VERSION_PATCH GET ${VERSION_JSON} patch)
 string(JSON APP_VERSION_PRE_RELEASE GET ${VERSION_JSON} preRelease)
 
-# try git commit count for version sorting
-execute_process(
-    COMMAND git rev-list HEAD --count
-    OUTPUT_VARIABLE APP_VERSION_BUILD
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+# Published Rust versions are reproducible across source archives and Git clones.
+set(APP_VERSION_BUILD "")
 
 if (APP_VERSION_BUILD)
     set(REDPANDA_VERSION "${APP_VERSION_MAJOR}.${APP_VERSION_MINOR}.${APP_VERSION_PATCH}.${APP_VERSION_BUILD}")
@@ -409,10 +404,54 @@ endif()
 
 # Development-only report validation; Python is never an IDE runtime requirement.
 add_executable(rust-workflow-checks EXCLUDE_FROM_ALL
-    test/rust-workflow-checks.cpp RedPandaIDE/src/rustworkspace.cpp RedPandaIDE/src/rustworkspace.h RedPandaIDE/src/rusttools.cpp)
+    test/rust-workflow-checks.cpp RedPandaIDE/src/rustworkspace.cpp RedPandaIDE/src/rustworkspace.h RedPandaIDE/src/rusttools.cpp RedPandaIDE/src/rustprojectoptions.cpp)
 target_include_directories(rust-workflow-checks PRIVATE RedPandaIDE/src)
 target_link_libraries(rust-workflow-checks PRIVATE qsynedit Qt::Test)
 add_executable(rust-hover-state-probe EXCLUDE_FROM_ALL test/rust-hover-state-probe.cpp)
+add_executable(rust-lsp-checks EXCLUDE_FROM_ALL test/rust-lsp-checks.cpp
+    RedPandaIDE/src/rustlspclient.cpp RedPandaIDE/src/rustlspclient.h
+    RedPandaIDE/src/rusttools.cpp RedPandaIDE/src/rustworkspace.cpp RedPandaIDE/src/rustworkspace.h RedPandaIDE/src/rustprojectoptions.cpp)
+target_include_directories(rust-lsp-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-lsp-checks PRIVATE qsynedit Qt::Test)
+target_compile_definitions(rust-lsp-checks PRIVATE REDPANDA_CPP_VERSION="${REDPANDA_VERSION}")
+add_executable(rust-terminal-checks EXCLUDE_FROM_ALL test/rust-terminal-checks.cpp
+    RedPandaIDE/src/rustterminal.cpp RedPandaIDE/src/rustterminal.h RedPandaIDE/src/rusttools.cpp)
+target_include_directories(rust-terminal-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-terminal-checks PRIVATE Qt::Test)
+add_executable(rust-snippet-checks EXCLUDE_FROM_ALL test/rust-snippet-checks.cpp RedPandaIDE/src/rustsnippet.cpp)
+target_include_directories(rust-snippet-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-snippet-checks PRIVATE Qt::Test)
+add_executable(rust-debug-checks EXCLUDE_FROM_ALL test/rust-debug-checks.cpp
+    RedPandaIDE/src/rustdebugsession.cpp RedPandaIDE/src/rustdebugsession.h
+    RedPandaIDE/src/rustterminal.cpp RedPandaIDE/src/rustterminal.h RedPandaIDE/src/rusttools.cpp)
+target_include_directories(rust-debug-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-debug-checks PRIVATE Qt::Test Qt::Network)
+add_executable(rust-project-checks EXCLUDE_FROM_ALL test/rust-project-checks.cpp
+    RedPandaIDE/src/rustprojectoptions.cpp RedPandaIDE/src/rusttools.cpp
+    RedPandaIDE/src/rustworkspace.cpp RedPandaIDE/src/rustworkspace.h)
+target_include_directories(rust-project-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-project-checks PRIVATE Qt::Test)
+add_executable(rust-text-edit-checks EXCLUDE_FROM_ALL test/rust-text-edit-checks.cpp RedPandaIDE/src/rusttextedits.cpp)
+add_executable(rust-clean-checks EXCLUDE_FROM_ALL test/rust-clean-checks.cpp RedPandaIDE/src/rustcleanplan.cpp)
+target_include_directories(rust-clean-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-clean-checks PRIVATE Qt::Test Qt::Concurrent)
+if(WIN32)
+    target_link_libraries(RedPandaIDE PRIVATE ole32)
+    target_link_libraries(rust-clean-checks PRIVATE ole32)
+endif()
+target_include_directories(rust-text-edit-checks PRIVATE RedPandaIDE/src)
+target_link_libraries(rust-text-edit-checks PRIVATE Qt::Test)
+if(WIN32)
+    add_executable(rust-console-bridge tools/rust-console-bridge.cpp)
+    set_target_properties(rust-console-bridge PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    if(MINGW)
+        target_link_options(rust-console-bridge PRIVATE -municode -static -static-libgcc -static-libstdc++)
+    endif()
+    add_dependencies(rust-terminal-checks rust-console-bridge)
+    add_dependencies(rust-debug-checks rust-console-bridge)
+    add_dependencies(RedPandaIDE rust-console-bridge)
+    install(TARGETS rust-console-bridge RUNTIME DESTINATION .)
+endif()
 target_link_libraries(rust-hover-state-probe PRIVATE qsynedit)
 add_executable(rust-icon-checks EXCLUDE_FROM_ALL test/rust-icon-checks.cpp RedPandaIDE/icons.qrc)
 set_target_properties(rust-icon-checks PROPERTIES AUTOUIC_SEARCH_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/RedPandaIDE/src/widgets")
@@ -420,6 +459,11 @@ target_include_directories(rust-icon-checks PRIVATE RedPandaIDE/src)
 target_compile_definitions(rust-icon-checks PRIVATE RUST_IDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/RedPandaIDE")
 target_link_libraries(rust-icon-checks PRIVATE Qt::Widgets Qt::Test Qt::Xml)
 if(BUILD_TESTING)
+    foreach(RUST_CHECK workflow lsp terminal snippet debug project text-edit icon clean)
+        add_test(NAME test-rust-${RUST_CHECK} COMMAND rust-${RUST_CHECK}-checks -o ${CMAKE_BINARY_DIR}/rust-${RUST_CHECK}-ctest.txt,txt)
+        set_tests_properties(test-rust-${RUST_CHECK} PROPERTIES TIMEOUT 180 LABELS "rust;functional" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        add_dependencies(all-test-targets rust-${RUST_CHECK}-checks)
+    endforeach()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME test-stabilization-report

@@ -25,7 +25,7 @@ bool validate(const QList<PCodeSnippet> &snippets, QString &error) {
         if (!s || s->caption.trimmed().isEmpty() || s->code.isEmpty() ||
             s->caption.size() > 256 || s->prefix.size() > 256 || s->desc.size() > 8192 || s->code.size() > 256 * 1024 ||
             s->section < -1 || s->section > 999 ||
-            !QStringList{"all", "c", "cpp", "asm"}.contains(s->language) ||
+            !QStringList{"all", "c", "cpp", "asm", "rust"}.contains(s->language) ||
             (s->prefix.trimmed().isEmpty() && s->section < 0)) {
             error = snippetError("Invalid snippet at row %1. Check name, prefix, code, language and menu section.").arg(i + 1); return false;
         }
@@ -113,6 +113,7 @@ bool matches(const PCodeSnippet &s, const QString &language) {
     return s && s->enabled && (s->language == "all" || s->language == language || (language == "c-cpp" && (s->language == "c" || s->language == "cpp")));
 }
 QString languageForFileType(FileType type) {
+    if(type==FileType::RustSource)return "rust";
     if (type == FileType::CSource) return "c";
     if (type == FileType::ATTASM || type == FileType::INTELASM || type == FileType::GAS || type == FileType::NASM) return "asm";
     if (type == FileType::CCppHeader) return "c-cpp";

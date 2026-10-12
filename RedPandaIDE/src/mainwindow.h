@@ -61,6 +61,9 @@ enum class RunType {
 
 class RustWorkspace;
 class RustLspClient;
+class RustDebugSession;
+class RustDebugPanel;
+class RustNavigation;
 class EditorManager;
 class QLabel;
 class QComboBox;
@@ -1077,8 +1080,18 @@ private:
     bool runRustCommand(const QString &command);
     void openRustWorkspace();
     void createRustWorkspace();
+    void configureRustProject();
+    void startRustDebug();
+    void syncRustBreakpoints();
+    void editRustBreakpoint(int index,bool forProject);
+    void updateRustDebugActions();
     RustWorkspace *mRustWorkspace=nullptr;
     RustLspClient *mRustLanguageClient=nullptr;
+    RustDebugSession *mRustDebugger=nullptr;
+    RustDebugPanel *mRustDebugPanel=nullptr;
+    RustNavigation *mRustNavigation=nullptr;
+    bool mRustPreparingDebug=false;
+    QSet<QString> mRustBreakpointFiles;
     QAction *mRustRestartAnalyzer=nullptr;
     QString mRustRoot;
     QSortFilterProxyModel *mProjectProxyModel;

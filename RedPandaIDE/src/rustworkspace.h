@@ -8,6 +8,7 @@
 #include <QStringConverter>
 #include <QTemporaryDir>
 #include "common.h"
+#include "rustprojectoptions.h"
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -24,6 +25,10 @@ public:
     void stop();
     void sendInput(const QString &text);
     void closeInput();
+    QStringList artifacts()const{return mArtifacts;}
+    RustProjectOptions options()const{return mOptions;}
+    QString root()const{return mRoot;}
+    QString command()const{return mCommand;}
 signals:
     void output(const QString &text);
     void issue(PCompileIssue value);
@@ -41,6 +46,9 @@ private:
     QStringDecoder mDecoder{QStringDecoder::Utf8};
     QString mRoot,mCommand;
     QString mRunAfterBuild;
+    QStringList mArtifacts;
+    RustProjectOptions mOptions;
+    bool mExecuting=false;
     std::unique_ptr<QTemporaryDir> mFileBuild;
     bool mDirectDiagnostics=false;
     qint64 mBytes=0;

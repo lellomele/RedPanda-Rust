@@ -8,6 +8,7 @@
 class RustTools {
 public:
     static void setSettingsFile(const QString &file);
+    static QString settingsFile();
     static QStringList names();
     static QString configuredPath(const QString &name);
     static QString detectedPath(const QString &name);

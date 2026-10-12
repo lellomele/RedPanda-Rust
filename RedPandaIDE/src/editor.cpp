@@ -191,6 +191,9 @@ Editor::Editor(QWidget *parent):
 }
 
 Editor::~Editor() {
+    // QObject::destroyed is emitted after derived members have already gone.
+    // Detach services while syntaxer/document/widget state is still valid.
+    emit aboutToDestroy(this);
     //qDebug()<<"editor "<<mFilename<<" deleted";
     cleanAutoBackup();
 }
@@ -300,6 +303,7 @@ bool Editor::save(bool force, bool doReparse) {
             mFileSystemWatcher->removePath(mFilename);
         emit fileSaving(this, mFilename);
         saveFile(mFilename);
+        mIsNew = false;
         emit fileSaved(this, mFilename);
         if (mFileSystemWatcher)
             mFileSystemWatcher->addPath(mFilename);

@@ -1,0 +1,12 @@
+[
+  {"caption":"Funzione Rust","prefix":"fn","code":"fn %REPL_BEGIN%name%REPL_END%(%REPL_BEGIN%args%REPL_END%) {\n\t%INSERT%\n}","description":"Funzione con argomenti","section":-1,"language":"rust","enabled":true},
+  {"caption":"Main Rust","prefix":"main","code":"fn main() {\n\t%INSERT%\n}","description":"Punto di ingresso","section":-1,"language":"rust","enabled":true},
+  {"caption":"Struct Rust","prefix":"struct","code":"struct %REPL_BEGIN%Name%REPL_END% {\n\t%REPL_BEGIN%field%REPL_END%: %REPL_BEGIN%i32%REPL_END%,\n}\n%INSERT%","description":"Struttura con un campo","section":-1,"language":"rust","enabled":true},
+  {"caption":"Enum Rust","prefix":"enum","code":"enum %REPL_BEGIN%Name%REPL_END% {\n\t%REPL_BEGIN%Variant%REPL_END%,\n}\n%INSERT%","description":"Enumerazione","section":-1,"language":"rust","enabled":true},
+  {"caption":"Impl Rust","prefix":"impl","code":"impl %REPL_BEGIN%Name%REPL_END% {\n\t%INSERT%\n}","description":"Blocco di implementazione","section":-1,"language":"rust","enabled":true},
+  {"caption":"Match Rust","prefix":"match","code":"match %REPL_BEGIN%value%REPL_END% {\n\t%REPL_BEGIN%pattern%REPL_END% => %REPL_BEGIN%expression%REPL_END%,\n\t_ => %REPL_BEGIN%default_expression%REPL_END%,\n}\n%INSERT%","description":"Corrispondenza dei pattern","section":-1,"language":"rust","enabled":true},
+  {"caption":"For Rust","prefix":"for","code":"for %REPL_BEGIN%item%REPL_END% in %REPL_BEGIN%items%REPL_END% {\n\t%INSERT%\n}","description":"Iterazione","section":-1,"language":"rust","enabled":true},
+  {"caption":"Test Rust","prefix":"test","code":"#[test]\nfn %REPL_BEGIN%test_name%REPL_END%() {\n\tassert_eq!(%REPL_BEGIN%actual%REPL_END%, %REPL_BEGIN%expected%REPL_END%);\n}\n%INSERT%","description":"Test unitario","section":-1,"language":"rust","enabled":true},
+  {"caption":"If let Rust","prefix":"iflet","code":"if let %REPL_BEGIN%Some(value)%REPL_END% = %REPL_BEGIN%expression%REPL_END% {\n\t%INSERT%\n}","description":"Pattern condizionale","section":-1,"language":"rust","enabled":true},
+  {"caption":"Result Rust","prefix":"result","code":"fn %REPL_BEGIN%name%REPL_END%() -> Result<%REPL_BEGIN%()%REPL_END%, %REPL_BEGIN%Box<dyn std::error::Error>%REPL_END%> {\n\t%INSERT%\n\tOk(())\n}","description":"Funzione con gestione degli errori","section":-1,"language":"rust","enabled":true}
+]

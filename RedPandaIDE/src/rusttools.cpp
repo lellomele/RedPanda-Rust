@@ -6,13 +6,15 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QReadWriteLock>
+#include <QCoreApplication>
 namespace {
-QString settingsFile;
+QString settingsFilename;
 QReadWriteLock settingsLock;
-QString profile(){QReadLocker locker(&settingsLock);return settingsFile;}
+QString profile(){QReadLocker locker(&settingsLock);return settingsFilename;}
 }
-void RustTools::setSettingsFile(const QString &file){QWriteLocker locker(&settingsLock);settingsFile=file;}
-QStringList RustTools::names(){return {"cargo","rustc","rustfmt","rust-analyzer"};}
+void RustTools::setSettingsFile(const QString &file){QWriteLocker locker(&settingsLock);settingsFilename=file;}
+QString RustTools::settingsFile(){return profile();}
+QStringList RustTools::names(){return {"cargo","rustc","rustfmt","rust-analyzer","codelldb"};}
 QString RustTools::configuredPath(const QString &name){
     const QString file=profile();if(file.isEmpty())return {};
     QSettings settings(file,QSettings::IniFormat);return settings.value("RustTools/"+name).toString();
@@ -29,9 +31,16 @@ QString RustTools::detectedPath(const QString &name){
 #else
     const QString binary=name;
 #endif
-    const QString variable=name=="cargo"?"CARGO":name=="rustc"?"RUSTC":name=="rustfmt"?"RUSTFMT":"REDPANDA_RUST_ANALYZER";
+    const QString variable=name=="cargo"?"CARGO":name=="rustc"?"RUSTC":name=="rustfmt"?"RUSTFMT":name=="codelldb"?"REDPANDA_CODELLDB":"REDPANDA_RUST_ANALYZER";
     const QString environment=qEnvironmentVariable(qPrintable(variable));
     if(!environment.isEmpty()&&QFileInfo(environment).isExecutable())return QFileInfo(environment).absoluteFilePath();
+    if(name=="codelldb"){
+        const auto bundled=QDir(QCoreApplication::applicationDirPath()).filePath("tools/codelldb/adapter/"+binary);
+        if(QFileInfo(bundled).isExecutable())return bundled;
+        QDir extensions(QDir::home().filePath(".vscode/extensions"));
+        auto installed=extensions.entryList({"vadimcn.vscode-lldb-*"},QDir::Dirs,QDir::Name|QDir::Reversed);
+        for(const auto &folder:installed){const auto path=extensions.filePath(folder+"/adapter/"+binary);if(QFileInfo(path).isExecutable())return path;}
+    }
     const QString home=qEnvironmentVariable("CARGO_HOME",QDir::home().filePath(".cargo"));
     const QString local=QDir(home).filePath("bin/"+binary);
     if(QFileInfo(local).isExecutable())return local;

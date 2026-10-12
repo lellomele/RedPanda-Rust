@@ -255,7 +255,7 @@ PSettingsDialog SettingsDialog::optionDialog(ColorManager *colorManager, IconsMa
     dialog->addPage(tr("General"), tr("Tools"), [colorManager, iconsManager] { return new ToolsGeneralWidget(tr("General"),tr("Tools"),iconsManager); }, "general encoding codifica indent tabs tabulazioni");
 
 #ifdef ENABLE_VCS
-    dialog->addPage(tr("Git"), tr("Tools"), [colorManager, iconsManager] { return new ToolsGitWidget(tr("Git"),tr("Tools"),iconsManager); }, "");
+    dialog->addPage(QStringLiteral("Git"), tr("Tools"), [colorManager, iconsManager] { return new ToolsGitWidget(QStringLiteral("Git"),tr("Tools"),iconsManager); }, "git repository commit branch merge clone fetch pull push");
 #endif
 
     dialog->addPage(tr("Recovery and resilience"), tr("Environment"), [iconsManager] { return new EnvironmentRecoveryWidget(tr("Recovery and resilience"), tr("Environment"), iconsManager); }, "recovery backup crash recover recupero resilienza salvataggio");

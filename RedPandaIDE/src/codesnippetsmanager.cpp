@@ -26,6 +26,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QCoreApplication>
 
 CodeSnippetsManager::CodeSnippetsManager(DirSettings *dirSettings, QObject *parent) : QObject(parent)
 {
@@ -45,7 +46,8 @@ void CodeSnippetsManager::load()
             if (file.error() == QFile::NoError && SnippetStorage::decode(bytes, snippets, error) &&
                 templates.value("cpp").isString() && templates.value("c").isString() && templates.value("gas").isString()) {
                 mSnippets = snippets; mNewCppFileTemplate = templates.value("cpp").toString();
-                mNewCFileTemplate = templates.value("c").toString(); mNewGASFileTemplate = templates.value("gas").toString(); return;
+                mNewCFileTemplate = templates.value("c").toString(); mNewGASFileTemplate = templates.value("gas").toString();
+                if(templates.value("rust").isString())mNewRustFileTemplate=templates.value("rust").toString();return;
             }
         }
         auto *message = new QMessageBox(QMessageBox::Warning, tr("Snippet library recovered"),
@@ -63,7 +65,7 @@ void CodeSnippetsManager::save()
     QString error;
     if (!SnippetStorage::validate(mSnippets, error)) throw FileError(error);
     QJsonObject root{{"version", 1}, {"snippets", QJsonDocument::fromJson(SnippetStorage::encode(mSnippets)).array()},
-        {"templates", QJsonObject{{"cpp", mNewCppFileTemplate}, {"c", mNewCFileTemplate}, {"gas", mNewGASFileTemplate}}}};
+        {"templates", QJsonObject{{"cpp", mNewCppFileTemplate}, {"c", mNewCFileTemplate}, {"gas", mNewGASFileTemplate},{"rust",mNewRustFileTemplate}}}};
     const auto bytes = QJsonDocument(root).toJson();
     if (bytes.size() > SnippetStorage::MaxFileBytes) throw FileError(tr("Snippet file is too large (maximum 8 MB)."));
     QSaveFile file(includeTrailingPathDelimiter(mDirSettings->config()) + "snippets-library.json"); file.setDirectWriteFallback(false);
@@ -82,12 +84,13 @@ QList<PCodeSnippet> CodeSnippetsManager::snippetsForLanguage(const QString &lang
 void CodeSnippetsManager::loadSnippets()
 {
     const QString filename = includeTrailingPathDelimiter(mDirSettings->config()) + DEV_CODESNIPPET_FILE;
+    const QString defaults=QCoreApplication::applicationName()=="RedPandaRust"?":/config/codesnippets-rust.json":":/config/codesnippets.json";
     QList<PCodeSnippet> candidate; QString error;
-    if (SnippetStorage::read(QFile::exists(filename) ? filename : ":/config/codesnippets.json", candidate, error)) {
+    if (SnippetStorage::read(QFile::exists(filename) ? filename : defaults, candidate, error)) {
         mSnippets = candidate; return;
     }
     const QString originalError = error;
-    if (mSnippets.isEmpty()) SnippetStorage::read(":/config/codesnippets.json", candidate, error);
+    if (mSnippets.isEmpty()) SnippetStorage::read(defaults, candidate, error);
     if (!candidate.isEmpty()) mSnippets = candidate;
     auto *message = new QMessageBox(QMessageBox::Warning, tr("Snippet library recovered"),
         tr("The snippet file could not be loaded. The previous library or built-in defaults are still available. The original file was not changed.\n%1").arg(originalError), QMessageBox::Ok);
@@ -223,7 +226,7 @@ QVariant CodeSnippetsModel::data(const QModelIndex &index, int role) const
             return snippet->section;
         case 4:
             if (role == Qt::EditRole) return snippet->language;
-            return snippet->language == "all" ? tr("All") : snippet->language == "cpp" ? QString("C++") : snippet->language == "c" ? QString("C") : tr("Assembly");
+            return snippet->language == "all" ? tr("All") : snippet->language == "cpp" ? QString("C++") : snippet->language == "rust" ? QString("Rust") : snippet->language == "c" ? QString("C") : tr("Assembly");
         case 5:
             return role == Qt::DisplayRole ? QVariant() : QVariant(snippet->enabled);
         }
@@ -242,7 +245,7 @@ bool CodeSnippetsModel::setData(const QModelIndex &index, const QVariant &value,
         case 1: s->prefix = value.toString(); break;
         case 2: s->desc = value.toString(); break;
         case 3: { bool ok; int section = value.toInt(&ok); if (!ok || section < -1 || section > 999) return false; s->section = section; break; }
-        case 4: { QString language = value.toString().toLower(); if (!QStringList{"all", "c", "cpp", "asm"}.contains(language)) return false; s->language = language; break; }
+        case 4: { QString language = value.toString().toLower(); if (!QStringList{"all", "c", "cpp", "asm", "rust"}.contains(language)) return false; s->language = language; break; }
         default: return false;
         }
     } else return false;

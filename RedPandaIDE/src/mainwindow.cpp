@@ -1,5 +1,8 @@
 #include "rustworkspace.h"
 #include "rustlspclient.h"
+#include "rustdebugsession.h"
+#include "rustdebugpanel.h"
+#include "rustnavigation.h"
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QPushButton>
@@ -564,6 +567,10 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     mQuitting=true;
+    delete mRustNavigation;
+    mRustNavigation=nullptr;
+    delete mRustDebugger;
+    mRustDebugger=nullptr;
     delete mRustLanguageClient;
     mRustLanguageClient=nullptr;
     mCCHandler.stop();
@@ -650,7 +657,7 @@ void MainWindow::updateEditorActions(const Editor *e)
     ui->menuCode->menuAction()->setVisible(mEditorManager->pageCount()>0);
     ui->menuEdit->menuAction()->setVisible(mEditorManager->pageCount()>0);
     ui->menuSelection->menuAction()->setVisible(mEditorManager->pageCount()>0);
-    ui->menuRefactor->menuAction()->setVisible(mEditorManager->pageCount()>0);
+    ui->menuRefactor->menuAction()->setVisible(!mRustNavigation&&mEditorManager->pageCount()>0);
 
     //it's not a compile action, but put here for convinience
     ui->actionSaveAll->setEnabled(
@@ -875,14 +882,19 @@ void MainWindow::updateCompileActions() {
 void MainWindow::updateCompileActions(const Editor *e)
 {
     if (mRustWorkspace) {
-        const bool busy=mRustWorkspace->busy();
+        const bool debugging=mRustDebugger&&mRustDebugger->active();
+        const bool busy=mRustWorkspace->busy()||debugging;
         ui->actionCompile->setEnabled(!busy);
         ui->actionRun->setEnabled(!busy);
         ui->actionRebuild->setEnabled(!busy);
         ui->actionMakeClean->setEnabled(false);
         ui->actionStop_Execution->setEnabled(busy);
-        ui->actionDebug->setEnabled(false);
+        ui->actionDebug->setEnabled(!busy&&e);
         ui->actionReformat_Code->setEnabled(!busy && e);
+        ui->actionGenerate_Assembly->setEnabled(!busy&&e);ui->actionGenerate_GIMPLE->setEnabled(!busy&&e);
+        ui->actionRun_Parameters->setEnabled(!busy);ui->actionCompiler_Options->setEnabled(!busy);
+        for(auto action:findChildren<QAction *>())if(action->objectName().startsWith("rust-command-"))action->setEnabled(!busy);
+        updateRustDebugActions();
         return;
     }
 
@@ -5430,6 +5442,7 @@ void MainWindow::onEditorTabContextMenu(QTabWidget* tabWidget, const QPoint &pos
 
 void MainWindow::disableDebugActions()
 {
+    if(mRustDebugger){updateRustDebugActions();return;}
     ui->actionInterrupt->setVisible(mDebugger && mDebugger->useDebugServer());
     ui->actionInterrupt->setEnabled(false);
     ui->actionStep_Into->setEnabled(false);
@@ -5447,6 +5460,7 @@ void MainWindow::disableDebugActions()
 
 void MainWindow::enableDebugActions()
 {
+    if(mRustDebugger){updateRustDebugActions();return;}
     ui->actionInterrupt->setVisible(mDebugger->useDebugServer());
     ui->actionInterrupt->setEnabled(mDebugger->useDebugServer() && mDebugger->inferiorRunning());
     ui->actionStep_Into->setEnabled(!mDebugger->inferiorRunning());
@@ -6706,13 +6720,14 @@ void MainWindow::on_actionRebuild_triggered()
 
 void MainWindow::on_actionStop_Execution_triggered()
 {
-    if(mRustWorkspace){mRustWorkspace->stop();return;}
+    if(mRustWorkspace){mRustWorkspace->stop();if(mRustDebugger)mRustDebugger->stop();return;}
     mCompilerManager->stopRun();
     mDebugger->stop();
 }
 
 void MainWindow::on_actionDebug_triggered()
 {
+    if(mRustDebugger){startRustDebug();return;}
     debug();
 }
 
@@ -6752,6 +6767,7 @@ bool MainWindow::debugInferiorhasBreakpoint()
 
 void MainWindow::on_actionStep_Over_triggered()
 {
+    if(mRustDebugger){mRustDebugger->command("next");return;}
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
         mDebugger->stepOver();
@@ -6760,6 +6776,7 @@ void MainWindow::on_actionStep_Over_triggered()
 
 void MainWindow::on_actionStep_Into_triggered()
 {
+    if(mRustDebugger){mRustDebugger->command("stepIn");return;}
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
         mDebugger->stepInto();
@@ -6769,6 +6786,7 @@ void MainWindow::on_actionStep_Into_triggered()
 
 void MainWindow::on_actionStep_Out_triggered()
 {
+    if(mRustDebugger){mRustDebugger->command("stepOut");return;}
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
         mDebugger->stepOut();
@@ -6778,6 +6796,7 @@ void MainWindow::on_actionStep_Out_triggered()
 
 void MainWindow::on_actionRun_To_Cursor_triggered()
 {
+    if(mRustDebugger){if(auto editor=mEditorManager->getEditor())mRustDebugger->runTo(editor->filename(),editor->caretY());return;}
     if (mDebugger->executing()) {
         Editor *e=mEditorManager->getEditor();
         if (e!=nullptr) {
@@ -6790,6 +6809,7 @@ void MainWindow::on_actionRun_To_Cursor_triggered()
 
 void MainWindow::on_actionContinue_triggered()
 {
+    if(mRustDebugger){mRustDebugger->command("continue");return;}
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
         mDebugger->resume();
@@ -6798,6 +6818,7 @@ void MainWindow::on_actionContinue_triggered()
 
 void MainWindow::on_actionAdd_Watch_triggered()
 {
+    if(mRustDebugPanel){bool ok=false;const auto editor=mEditorManager->getEditor();const auto expression=QInputDialog::getText(this,tr("Watch Rust"),tr("Espressione:"),QLineEdit::Normal,editor?editor->wordAtCursor():QString(),&ok);if(ok)mRustDebugPanel->addWatch(expression);return;}
     QString s = "";
     Editor *e = mEditorManager->getEditor();
     if (e!=nullptr) {
@@ -6823,6 +6844,7 @@ void MainWindow::on_actionAdd_Watch_triggered()
 
 void MainWindow::on_actionView_CPU_Window_triggered()
 {
+    if(mRustDebugPanel){mRustDebugPanel->showAssembly();return;}
     showCPUInfoDialog();
 }
 
@@ -7240,6 +7262,7 @@ void MainWindow::on_actionBreakpoint_property_triggered()
             PBreakpoint breakpoint = mDebugger->breakpointAt(line,editor->filename(),&index,editor->inProject());
             if (!breakpoint)
                 return;
+            if(editor->syntaxer()&&editor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust){editRustBreakpoint(index,editor->inProject());return;}
             bool isOk;
             QString s=QInputDialog::getText(this,
                                       tr("Break point condition"),
@@ -7876,8 +7899,8 @@ void MainWindow::showHideMessagesTab(QWidget *widget, bool show)
             int insert = -1;
             for (int i=0;i<ui->tabMessages->count();i++) {
                 QWidget * w=ui->tabMessages->widget(i);
-                PTabWidgetInfo infoW = mTabMessagesData[w];
-                if (infoW->order>info->order) {
+                PTabWidgetInfo infoW = mTabMessagesData.value(w);
+                if (infoW&&infoW->order>info->order) {
                     insert = i;
                     break;
                 }
@@ -8198,6 +8221,7 @@ void MainWindow::modifyBreakpointCondition(int index)
                 debugger()->isForProject()
                 );
     if (breakpoint) {
+        if(QFileInfo(breakpoint->filename).suffix().compare("rs",Qt::CaseInsensitive)==0){editRustBreakpoint(index,debugger()->isForProject());return;}
         bool isOk;
         QString s=QInputDialog::getText(this,
                                   tr("Break point condition"),
@@ -9220,6 +9244,7 @@ void MainWindow::on_actionOpen_Folder_triggered()
 
 void MainWindow::on_actionRun_Parameters_triggered()
 {
+    if(mRustWorkspace){configureRustProject();return;}
     changeOptions(
                 SettingsDialog::tr("General"),
                 SettingsDialog::tr("Program Runner")
@@ -9623,6 +9648,7 @@ void MainWindow::on_actionTools_Output_triggered()
 
 void MainWindow::on_actionDebug_Window_triggered()
 {
+    if(mRustDebugPanel){showHideMessagesTab(mRustDebugPanel,ui->actionDebug_Window->isChecked());return;}
     bool state = ui->actionDebug_Window->isChecked();
     ui->actionDebug_Window->setChecked(state);
     showHideMessagesTab(ui->tabDebug, state);
@@ -10424,7 +10450,7 @@ void MainWindow::on_actionEncode_in_UTF_8_BOM_triggered()
 
 void MainWindow::on_actionCompiler_Options_triggered()
 {
-    if(mRustWorkspace){openRustWorkspace();return;}
+    if(mRustWorkspace){configureRustProject();return;}
     Editor * editor = mEditorManager->getEditor();
     if (editor && editor->fileType() == FileType::NASM) {
         changeOptions(
@@ -10590,6 +10616,7 @@ SearchDialog *MainWindow::searchDialog() const
 
 void MainWindow::on_actionGenerate_Assembly_triggered()
 {
+    if(mRustWorkspace){runRustCommand("asm");return;}
     doGenerateAssembly();
 }
 
@@ -10741,6 +10768,7 @@ void MainWindow::on_actionIA_32_Assembly_Language_Reference_Manual_triggered()
 
 void MainWindow::on_actionAdd_Watchpoint_triggered()
 {
+    if(mRustDebugPanel){mRustDebugPanel->addDataBreakpoint();return;}
     QString s = "";
     bool isOk;
     s=QInputDialog::getText(this,
@@ -11028,6 +11056,7 @@ void MainWindow::on_actionGAS_triggered()
 
 void MainWindow::on_actionGenerate_GIMPLE_triggered()
 {
+    if(mRustWorkspace){runRustCommand("llvm");return;}
     doGenerateGimple();
 }
 
