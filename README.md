@@ -2,7 +2,7 @@
 
 IDE desktop per Rust derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit. Include compilazione, esecuzione, test, formattazione, analisi semantica, completamento, refactoring, debug e Git.
 
-**1.0.0-beta.1 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
+**1.0.0-beta.2 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
 
 ## Installazione
 
