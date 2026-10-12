@@ -4,6 +4,7 @@
 - [Matrice delle funzioni Rust](RUST-FEATURE-MATRIX.md)
 - [Perimetro e criteri della 1.0](RELEASE-1.0.md)
 - [Verifiche e compilazione dei test](TESTING_RUST.md)
+- [Confronto e scelta dell'algoritmo C++ per le modifiche del testo](RUST-TEXT-EDITS-COMPARISON.md)
 - [Architettura dell'adattamento Rust](MODIFICHE_RUST.md)
 - [Licenza e attribuzioni](../ATTRIBUTIONS.md)
 

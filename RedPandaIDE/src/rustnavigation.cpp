@@ -155,7 +155,8 @@ bool RustNavigation::applyEdits(const QJsonObject &workspaceEdit,Editor *source,
         QString error;if(!RustTextEdits::plan(candidate.before,it.value(),candidate.edits,error))return reject(error);
         if(!oldName.isEmpty())for(const auto &edit:candidate.edits){auto original=candidate.before.mid(edit.start,edit.end-edit.start),expected=oldName;if(original.startsWith("r#"))original=original.mid(2);if(expected.startsWith("r#"))expected=expected.mid(2);
             if(original!=expected)return reject(tr("Il testo da rinominare non corrisponde alla proposta; nessun documento modificato."));}
-        candidate.after=RustTextEdits::apply(candidate.before,candidate.edits);count+=candidate.edits.size();candidates.append(candidate);
+        if(!RustTextEdits::applyChecked(candidate.before,candidate.edits,candidate.after,error))return reject(error);
+        count+=candidate.edits.size();candidates.append(candidate);
     }
     if(preview){
         QDialog dialog(mWindow);dialog.setObjectName("rustWorkspaceEditPreview");dialog.setWindowTitle(tr("Anteprima modifiche Rust"));dialog.resize(800,500);auto layout=new QVBoxLayout(&dialog);
