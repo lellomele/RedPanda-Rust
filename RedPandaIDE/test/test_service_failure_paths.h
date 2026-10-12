@@ -11,5 +11,6 @@ private slots:
     void deterministic_malformed_library_corpus();
     void snippet_replacement_ranges_reject_unsupported_layouts();
     void diagnostic_handler_reinstall_restores_previous_handler();
+    void native_crash_records_error_and_dump();
 };
 #endif

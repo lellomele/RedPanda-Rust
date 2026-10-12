@@ -2,7 +2,7 @@
 
 IDE desktop per Rust derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit. Include compilazione, esecuzione, test, formattazione, analisi semantica, completamento, refactoring, debug e Git.
 
-**1.0.0-beta.2 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
+**1.0.0-beta.3 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
 
 ## Installazione
 
@@ -13,6 +13,8 @@ Installare una toolchain Rust funzionante tramite [rustup](https://rustup.rs), c
 ```text
 rustup component add rust-analyzer rust-src rustfmt clippy
 ```
+
+Cartella di lavoro e percorsi dei file salvati aperti vengono registrati anche durante la sessione. La riapertura dei file rispetta la preferenza di caricamento automatico dell'ultima sessione; il recupero dei contenuti non salvati resta periodico, secondo l'intervallo configurato. Su Windows la diagnostica dei crash nativi salva `diagnostics.log.native-crash.log` e, quando possibile, `crash-*.dmp` nella cartella `config`; un avviso compare al successivo avvio.
 
 Per il debug installare [CodeLLDB 1.12.3](https://github.com/vadimcn/codelldb/releases/tag/v1.12.3), anche come estensione di Visual Studio Code. Gli strumenti Rust e CodeLLDB sono esterni alla distribuzione. La IDE rileva `%USERPROFILE%\.cargo\bin`, `$CARGO_HOME/bin`, PATH e CodeLLDB nelle estensioni di VS Code. I percorsi, il debugger e l'edizione dei file singoli si configurano in **Strumenti → Opzioni → Rust → Strumenti del compilatore**. **Verifica strumenti** mostra le versioni rilevate.
 

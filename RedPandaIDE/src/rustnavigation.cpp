@@ -34,14 +34,24 @@ RustNavigation::RustNavigation(EditorManager *manager,RustLspClient *client,QTre
     connect(client,&RustLspClient::readyChanged,this,[this](bool ready){if(ready)mRefresh.start();else{mPending.clear();mOutline->clear();}});
     connect(manager,&EditorManager::editorOpenned,this,&RustNavigation::attachEditors);
     connect(outline,&QTreeWidget::itemActivated,this,[this](QTreeWidgetItem *item){
-        if(mOutlinePath.isEmpty())return;auto editor=mOpen(mOutlinePath);const auto position=item->data(0,Qt::UserRole).toJsonObject();
+        if(!item||mOutlinePath.isEmpty())return;
+        // Opening/activating the editor emits focus signals synchronously.
+        // Those signals may clear the tree and delete item: copy everything
+        // before calling code that can change focus or rebuild the outline.
+        const QString filename=mOutlinePath;
+        const auto position=item->data(0,Qt::UserRole).toJsonObject();
         const int line=position.value("line").toInt(-1),character=position.value("character").toInt(-1);
+        if(line<0||character<0)return;
+        auto editor=mOpen(filename);
         if(editor&&line>=0&&line<editor->lineCount()&&character>=0&&character<=editor->lineText(line).size())editor->setCaretXYCentered({character,line});
     });attachEditors();
 }
 void RustNavigation::attachEditors(){
     for(int i=0;i<mManager->pageCount();++i){auto editor=(*mManager)[i];if(editor->property("rustNavigationAttached").toBool())continue;editor->setProperty("rustNavigationAttached",true);
-        connect(editor,&Editor::focusInOccured,this,[this]{mOutline->clear();mOutlinePath.clear();mRefresh.start();});
+        connect(editor,&Editor::focusInOccured,this,[this,editor]{
+            if(mOutlinePath!=path(editor->filename())){mOutline->clear();mOutlinePath.clear();}
+            mRefresh.start();
+        });
         connect(editor,&QSynedit::QSynEdit::changed,this,[this,editor]{
             for(int id:mPending.keys())if(mPending[id].editor==editor){if(mClient)mClient->cancel(id);mPending.remove(id);}mRefresh.start();
         });

@@ -50,10 +50,15 @@
 #include <QDialogButtonBox>
 #include <QInputDialog>
 #include <QHeaderView>
+#include <QTreeWidgetItemIterator>
+#include <QPersistentModelIndex>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QtTest>
 #include <qsynedit/syntaxer/rust.h>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 int MainWindow::runRustUiChecks(const QString &outputDir){
     QTimer modalCloser;
@@ -72,6 +77,59 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             QEventLoop wait;QTimer::singleShot(30,&wait,&QEventLoop::quit);wait.exec();}
         return false;
     };
+    const auto outlineInput=qEnvironmentVariable("RUST_OUTLINE_CHECK_SOURCE");
+    const auto outlineSource=outlineInput.isEmpty()?QString{}:QFileInfo(outlineInput).absoluteFilePath();
+    if(!outlineSource.isEmpty()){
+        const auto phase=qEnvironmentVariable("RUST_OUTLINE_CHECK_PHASE");
+        if(phase=="resume"){
+            check("Interrupted session restores open file",mEditorManager->getOpenedEditor(outlineSource)!=nullptr);
+            check("Interrupted session restores working folder",QDir::cleanPath(pSettings->environment().currentFolder())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
+            check("Interrupted session restores process working directory",QDir::cleanPath(QDir::currentPath())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
+        }
+        setFilesViewRoot(QFileInfo(outlineSource).absolutePath(),true);
+        auto editor=openFile(outlineSource);
+        auto outline=findChild<QTreeWidget *>("rustOutline");
+        check("Reported Rust file opens",editor&&outline);
+        if(editor&&outline){
+            ui->tabExplorer->setCurrentWidget(ui->tabStructure);
+            for(int cycle=0;cycle<20;++cycle){
+                QTreeWidgetItem *target=nullptr;QElapsedTimer deadline;deadline.start();
+                while(!target&&deadline.elapsed()<45000){
+                    for(QTreeWidgetItemIterator it(outline);*it;++it)if((*it)->text(0)=="set"){target=*it;break;}
+                    if(!target)QTest::qWait(25);
+                }
+                check(QString("ContaLitri::set exists %1").arg(cycle),target!=nullptr);
+                if(!target)break;
+                const auto position=target->data(0,Qt::UserRole).toJsonObject();
+                const QPersistentModelIndex index(outline->indexFromItem(target));
+                outline->expandAll();outline->scrollToItem(target);outline->setCurrentItem(target);outline->setFocus();QTest::qWait(30);
+                if(!index.isValid()){check("Outline refresh invalidates test index safely",true);continue;}
+                const auto point=outline->visualRect(index).center();
+                // QTest's double-click event does not include the preceding
+                // press/release needed by QAbstractItemView's pressed index.
+                QTest::mouseClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);
+                QTest::mouseDClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);QTest::qWait(30);
+                check(QString("Structure double click reaches set %1").arg(cycle),editor->caretY()==position.value("line").toInt(-1)&&editor->caretX()==position.value("character").toInt(-1));
+                check(QString("Source unchanged after navigation %1").arg(cycle),!editor->modified());
+            }
+        }
+        QTest::qWait(1200);
+        QFile journal(QDir(pSettings->dirs().config()).filePath("lastopens.json"));
+        const bool readable=journal.open(QIODevice::ReadOnly);
+        const auto state=readable?QJsonDocument::fromJson(journal.readAll()).object():QJsonObject{};
+        check("Open-session journal exists before closing",readable);
+        check("Working folder persisted before closing",QDir::cleanPath(state.value("workingFolder").toString())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
+        bool recorded=false;for(const auto &entry:state.value("files").toArray())if(QFileInfo(entry.toObject().value("filename").toString()).absoluteFilePath()==QFileInfo(outlineSource).absoluteFilePath())recorded=true;
+        check("Saved source path persisted before closing",recorded);
+        if(outline){const auto before=editor?editor->caretXY():QSynedit::CharPos{};outline->itemActivated(nullptr,0);check("Null outline activation is harmless",!editor||editor->caretXY()==before);}
+        QFile report(outputDir+"/checks.json");if(report.open(QIODevice::WriteOnly))report.write(QJsonDocument(QJsonObject{{"failed",failed},{"checks",checks}}).toJson());
+        report.close();
+        grab().save(outputDir+"/outline.png");
+#ifdef Q_OS_WIN
+        if(phase=="interrupt"){qInfo()<<"RUST_QA intentionally terminating isolated session";TerminateProcess(GetCurrentProcess(),86);}
+#endif
+        return failed?1:0;
+    }
     QDir().mkpath(outputDir+"/cargo-project/src");const QString root=outputDir+"/cargo-project";
     check("manifest",put(root+"/Cargo.toml","[package]\nname=\"rust_ui_probe\"\nversion=\"0.1.0\"\nedition=\"2024\"\n"));
     const QString source=root+"/src/main.rs";

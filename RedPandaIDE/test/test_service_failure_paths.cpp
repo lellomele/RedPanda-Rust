@@ -8,10 +8,31 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QProcess>
+#include <QDir>
 #include <random>
 
 static QByteArray readFile(const QString &path) {
     QFile f(path); if (!f.open(QIODevice::ReadOnly)) return {}; return f.readAll();
+}
+void TestServiceFailurePaths::native_crash_records_error_and_dump(){
+#ifdef Q_OS_WIN
+    QTemporaryDir dir;QVERIFY(dir.isValid());
+    const auto log=dir.filePath("diagnostics.log");
+    QProcess child;child.start(QCoreApplication::applicationFilePath(),{"--native-crash-probe",log});
+    QVERIFY(child.waitForStarted(5000));QVERIFY(child.waitForFinished(15000));
+    QVERIFY(child.exitCode()!=0||child.exitStatus()==QProcess::CrashExit);
+    const auto record=readFile(log+".native-crash.log");
+    QVERIFY2(record.contains("code=0xC0000005"),record.constData());
+    const auto dumps=QDir(dir.path()).entryList({"crash-*.dmp"},QDir::Files);
+    QCOMPARE(dumps.size(),1);QVERIFY(readFile(dir.filePath(dumps[0])).startsWith("MDMP"));
+    QVERIFY(QFileInfo::exists(log+".crash-pending"));
+    Diagnostics::install(log);const auto previous=Diagnostics::takePreviousCrashDirectory();
+    const auto repeated=Diagnostics::takePreviousCrashDirectory();Diagnostics::uninstall();
+    QCOMPARE(previous,dir.path());QVERIFY(repeated.isEmpty());QVERIFY(!QFileInfo::exists(log+".crash-pending"));
+#else
+    QSKIP("Windows native crash handler; other platforms keep their system diagnostics.");
+#endif
 }
 void TestServiceFailurePaths::recovery_rejects_corrupt_inputs_without_replacing_state() {
     QTemporaryDir dir; QVERIFY(dir.isValid());

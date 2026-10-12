@@ -29,6 +29,9 @@ SessionRecovery::SessionRecovery(MainWindow *window) : QObject(window), mWindow(
     });
     mElapsed.start(); mTimer.setInterval(1000);
     connect(&mTimer, &QTimer::timeout, this, [this] {
+        // Persist saved-file paths and working folder independently of the
+        // optional, less frequent backup of modified document contents.
+        mWindow->saveLastOpens(false);
         if (pSettings->environment().recoveryEnabled() && mElapsed.elapsed() >= pSettings->environment().recoveryInterval() * 1000)
             checkpoint();
     });

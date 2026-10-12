@@ -3527,10 +3527,20 @@ void MainWindow::onBookmarkContextMenu(const QPoint &pos)
     menu.exec(ui->tableBookmark->mapToGlobal(pos));
 }
 
-bool MainWindow::saveLastOpens()
+void MainWindow::startSessionPersistence()
 {
+    mSessionPersistenceEnabled=true;
+    connect(mEditorManager,&EditorManager::editorOpenned,this,[this]{saveLastOpens(false);},Qt::QueuedConnection);
+    connect(mEditorManager,&EditorManager::editorClosed,this,[this]{saveLastOpens(false);},Qt::QueuedConnection);
+    saveLastOpens(false);
+}
+
+bool MainWindow::saveLastOpens(bool interactive)
+{
+    if(!interactive&&(!mSessionPersistenceEnabled||mOpeningFiles||isQuitting()||isClosingAll()))return true;
     QString filename = includeTrailingPathDelimiter(pSettings->dirs().config()) + DEV_LASTOPENS_FILE;
     QJsonObject rootObj;
+    rootObj["workingFolder"]=pSettings->environment().currentFolder();
     if (mProject) {
         rootObj["lastProject"]=mProject->filename();
     }
@@ -3539,6 +3549,8 @@ bool MainWindow::saveLastOpens()
       Editor * editor = (*mEditorManager)[i];
       QJsonObject fileObj;
       if (editor->isNew()) {
+          // Unsaved buffers belong to SessionRecovery, not this path journal.
+          if(!interactive)continue;
           if (!editor->modified())
               continue;
           QMessageBox::StandardButton reply;
@@ -3559,7 +3571,7 @@ bool MainWindow::saveLastOpens()
 
       fileObj["filename"] = editor->filename();
       fileObj["onLeft"] = (mEditorManager->findPageControlForEditor(editor) != mEditorManager->rightPageWidget());
-      fileObj["focused"] = editor->hasFocus();
+      fileObj["focused"] = editor==mEditorManager->getEditor();
       fileObj["caretX"] = editor->caretX();
       fileObj["caretY"] = editor->caretY();
       fileObj["top"] = editor->topPos();
@@ -3574,9 +3586,13 @@ bool MainWindow::saveLastOpens()
     QJsonDocument doc;
     doc.setObject(rootObj);
     QByteArray json = doc.toJson();
+    if(!interactive&&json==mLastOpenSessionBytes)return true;
+    if(json.size()>4*1024*1024){qWarning()<<"Open-session journal exceeds 4 MiB";return interactive;}
     QSaveFile file(filename);
+    file.setDirectWriteFallback(false);
 
     if (!file.open(QFile::WriteOnly | QFile::Truncate)) {
+        if(!interactive){qWarning()<<"Open-session journal write failed:"<<file.errorString();return false;}
         QMessageBox::critical(this,
                               tr("Save last open info error"),
                               tr("Can't open last open information file '%1' for write!")
@@ -3585,6 +3601,7 @@ bool MainWindow::saveLastOpens()
         return true;
     }
     if (file.write(doc.toJson())!=json.size()) {
+        if(!interactive){qWarning()<<"Open-session journal write failed:"<<file.errorString();return false;}
         QMessageBox::critical(this,
                               tr("Save last open info error"),
                               tr("Can't save last open info file '%1'")
@@ -3593,12 +3610,15 @@ bool MainWindow::saveLastOpens()
         return true;
     }
     if (!file.commit()) {
+        if(!interactive){qWarning()<<"Open-session journal commit failed:"<<file.errorString();return false;}
         QMessageBox::warning(this, tr("Save last open info error"), file.errorString());
+        return true;
     }
+    mLastOpenSessionBytes=json;
     return true;
 }
 
-void MainWindow::loadLastOpens()
+void MainWindow::loadLastOpens(bool restoreFiles)
 {
     mOpeningFiles=true;
     auto action=finally([this]{
@@ -3617,6 +3637,7 @@ void MainWindow::loadLastOpens()
         return;
     }
     QJsonParseError error;
+    if(file.size()>4*1024*1024){qWarning()<<"Open-session journal too large; retained";return;}
     QJsonDocument doc=QJsonDocument::fromJson(file.readAll(),&error);
     if (error.error != QJsonParseError::NoError) {
         QMessageBox::critical(this,
@@ -3629,6 +3650,12 @@ void MainWindow::loadLastOpens()
 
     }
     QJsonObject rootObj = doc.object();
+    const auto workingFolder=rootObj.value("workingFolder").toString();
+    if(!workingFolder.isEmpty()&&QFileInfo(workingFolder).isDir()){
+        pSettings->environment().setCurrentFolder(workingFolder);
+        QDir::setCurrent(workingFolder);
+    }
+    if(!restoreFiles)return;
     QString projectFilename = rootObj["lastProject"].toString();
     if (!projectFilename.isEmpty()) {
         openProject(projectFilename, false);
@@ -8774,6 +8801,7 @@ void MainWindow::setFilesViewRoot(const QString &path, bool setOpenFolder)
     }
     ui->cbFilesPath->setCurrentIndex(pos);
     ui->cbFilesPath->lineEdit()->setCursorPosition(1);
+    saveLastOpens(false);
 }
 
 void MainWindow::clearIssues()

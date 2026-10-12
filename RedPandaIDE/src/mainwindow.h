@@ -174,8 +174,9 @@ public:
     void updateClassBrowserForEditor(Editor* editor);
     void resetAutoSaveTimer();
     void updateShortcuts();
-    bool saveLastOpens();
-    void loadLastOpens();
+    bool saveLastOpens(bool interactive=true);
+    void startSessionPersistence();
+    void loadLastOpens(bool restoreFiles=true);
     void updateTools();
 
     void openFiles(const QStringList& files);
@@ -1108,6 +1109,10 @@ protected:
 public:
     bool event(QEvent *event) override;
     int runRustUiChecks(const QString &outputDir);
+private:
+    bool mSessionPersistenceEnabled=false;
+    QByteArray mLastOpenSessionBytes;
+public:
 
     bool isClosingAll() const;
     bool isQuitting() const;

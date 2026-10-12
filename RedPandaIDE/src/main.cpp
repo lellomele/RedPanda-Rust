@@ -463,6 +463,7 @@ int main(int argc, char *argv[])
         QStringList filesToOpen = uiTestOutput.isEmpty() ? app.arguments() : QStringList{app.applicationFilePath()};
         filesToOpen.pop_front();
         if (!filesToOpen.isEmpty()) {
+            mainWindow.loadLastOpens(false);
             QStringList absoluteFiles;
             //convert all relative path to absolute path
             foreach (const QString& path, filesToOpen) {
@@ -475,8 +476,7 @@ int main(int argc, char *argv[])
             }
             mainWindow.openFiles(absoluteFiles);
         } else {
-            if (pSettings->editor().autoLoadLastFiles())
-                mainWindow.loadLastOpens();
+            mainWindow.loadLastOpens(pSettings->editor().autoLoadLastFiles());
         }
         if (mainWindow.editorManager()->pageCount()==0 && !mainWindow.project()) {
             mainWindow.newEditor();
@@ -487,6 +487,13 @@ int main(int argc, char *argv[])
 
         //reset default open folder
         mainWindow.setFilesViewRoot(pSettings->environment().currentFolder());
+        mainWindow.startSessionPersistence();
+        const auto previousCrash=Diagnostics::takePreviousCrashDirectory();
+        if(!previousCrash.isEmpty()&&uiTestOutput.isEmpty())QTimer::singleShot(0,&mainWindow,[&mainWindow,previousCrash]{
+            auto *message=new QMessageBox(QMessageBox::Warning,QObject::tr("Arresto anomalo nella sessione precedente"),
+                QObject::tr("È stato rilevato un errore nativo nella sessione precedente. I rapporti diagnostici sono conservati in:\n%1").arg(previousCrash),QMessageBox::Ok,&mainWindow);
+            message->setAttribute(Qt::WA_DeleteOnClose);message->open();
+        });
         if(!uiTestOutput.isEmpty())qInfo()<<"RUST_QA files root configured";
 
 #ifdef Q_OS_WIN
