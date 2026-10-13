@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QPersistentModelIndex>
 #include <QSignalSpy>
+#include <QStandardItemModel>
 #include "test_search_models.h"
 #include "src/widgets/searchresultview.h"
 
@@ -33,6 +34,22 @@ PSearchResultTreeItem fileResult(const QString &filename, int matches)
 }
 
 } // namespace
+
+void TestSearchModels::stale_and_foreign_indexes_do_not_dereference_nodes(){
+    SearchResultModel model;auto results=addHistory(model,"old");model.addResultToSearchResults(results,fileResult("old.rs",2));
+    auto tree=model.treeModel();const auto staleParent=tree->index(0,0),staleChild=tree->index(0,0,staleParent);results.reset();model.clear();
+    for(int i=0;i<500;++i){const auto current=addHistory(model,QString::number(i));model.addResultToSearchResults(current,fileResult("new.rs",2));
+        QVERIFY(!tree->data(staleParent).isValid());QVERIFY(!tree->data(staleChild).isValid());QCOMPARE(tree->rowCount(staleParent),0);QVERIFY(!tree->parent(staleChild).isValid());QVERIFY(tree->flags(staleChild)==Qt::NoItemFlags);
+        QString file;int line=0,start=0;QVERIFY(!tree->getItemFileAndLineChar(staleChild,file,line,start));QVERIFY(!tree->setData(staleChild,true,Qt::CheckStateRole));model.clear();}
+    QStandardItemModel foreign(1,1);QVERIFY(!tree->data(foreign.index(0,0)).isValid());QCOMPARE(tree->rowCount(foreign.index(0,0)),0);QVERIFY(!tree->index(0,0,foreign.index(0,0)).isValid());
+}
+void TestSearchModels::mutation_from_reset_and_insert_is_refused(){
+    SearchResultModel model;QAbstractItemModelTester tester(model.treeModel(),QAbstractItemModelTester::FailureReportingMode::QtTest);
+    int depth=0,maxDepth=0;connect(model.treeModel(),&QAbstractItemModel::modelAboutToBeReset,&model,[&]{++depth;maxDepth=qMax(maxDepth,depth);model.clear();QVERIFY(!addHistory(model,"nested"));model.treeModel()->setSelectable(true);});
+    connect(model.treeModel(),&QAbstractItemModel::modelReset,&model,[&]{--depth;});const auto current=addHistory(model,"outer");QVERIFY(current);QCOMPARE(model.currentResults(),current);QCOMPARE(maxDepth,1);QCOMPARE(depth,0);
+    connect(model.treeModel(),&QAbstractItemModel::rowsAboutToBeInserted,&model,[&]{model.clear();model.removeSearchResults(0);});model.addResultToSearchResults(current,fileResult("kept.rs",2));QCOMPARE(model.treeModel()->rowCount(),1);QCOMPARE(model.currentResults(),current);
+    model.treeModel()->setSelectable(true);QCOMPARE(depth,0);QCOMPARE(maxDepth,1);QCOMPARE(model.treeModel()->rowCount(),1);
+}
 
 void TestSearchModels::history_combobox_reentrancy_has_balanced_resets()
 {

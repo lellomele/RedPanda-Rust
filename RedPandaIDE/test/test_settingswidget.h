@@ -8,5 +8,6 @@ class TestSettingsWidget : public QObject
 private slots:
     void test_checkbox_disconnect();
     void test_repeated_load_does_not_duplicate_connections();
+    void malformed_editor_geometry_values_are_bounded();
 };
 #endif

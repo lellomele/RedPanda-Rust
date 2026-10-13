@@ -5,9 +5,11 @@
 #include <QStringList>
 #include <QByteArray>
 #include <QHash>
+#include <atomic>
+#include <memory>
 namespace RustClean {
 struct Plan {QString target,error;QStringList preview,files;QHash<QString,QPair<qint64,qint64>> fileState;QByteArray fingerprint;int entries=0;qint64 bytes=0;bool valid=false;};
 Plan inspect(const QString &target,const QString &workspace,const QStringList &protectedFiles);
-bool recycle(const Plan &plan,const QString &workspace,const QStringList &protectedFiles,QString &error);
+bool recycle(const Plan &plan,const QString &workspace,const QStringList &protectedFiles,QString &error,const std::shared_ptr<std::atomic_bool> &cancel={});
 }
 #endif

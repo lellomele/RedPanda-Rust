@@ -456,7 +456,8 @@ void LuaSyntaxer::numberProc()
         case 'e':
         case 'E':
             if (mTokenId!=TokenId::Hex) {
-                if (mRun-1>=0 && (mLine[mRun-1]>='0' || mLine[mRun-1]<='9') ) {//exponent
+                // Lua also permits the exponent immediately after the dot.
+                if (mRun-1>=0 && ((mLine[mRun-1]>='0' && mLine[mRun-1]<='9') || mLine[mRun-1]=='.') ) {//exponent
                     for (int i=idx1;i<mRun;i++) {
                         if (mLine[i] == 'e' || mLine[i]=='E') { // too many exponents
                             mRun+=1;

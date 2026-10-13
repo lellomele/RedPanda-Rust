@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QDir>
 #include <QtConcurrent>
+#include <QThread>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -22,6 +23,7 @@ private slots:
     void protectOpenDocuments(){QVERIFY(!RustClean::inspect(target,root,{target+"/debug/app.exe"}).valid);}
     void generatedSource(){QVERIFY(QDir().mkpath(target+"/debug/build/example/out"));QVERIFY(put(target+"/debug/build/example/out/bindings.rs","// generated"));QVERIFY(RustClean::inspect(target,root,{}).valid);}
     void changedAfterPreview(){const auto plan=RustClean::inspect(target,root,{});QVERIFY(plan.valid);QVERIFY(put(target+"/debug/new.exe","new artifact"));QString error;QVERIFY(!RustClean::recycle(plan,root,{},error));QVERIFY(QFileInfo::exists(target+"/debug/app.exe"));}
+    void cancelledBeforeMovePreservesAllFiles(){const auto plan=RustClean::inspect(target,root,{});QVERIFY(plan.valid);const auto cancel=std::make_shared<std::atomic_bool>(true);QString error;QVERIFY(!RustClean::recycle(plan,root,{},error,cancel));QVERIFY(error.contains("annullata"));QVERIFY(QFileInfo::exists(target+"/debug/app.exe"));QVERIFY(QFileInfo::exists(target+"/.rustc_info.json"));}
     void recycleOwnedTarget(){
 #ifdef Q_OS_WIN
         const auto plan=RustClean::inspect(target,root,{});QVERIFY(plan.valid);QString error;QVERIFY2(RustClean::recycle(plan,root,{},error),qPrintable(error));QVERIFY(!QFileInfo::exists(target));QVERIFY(QFileInfo::exists(root+"/Cargo.toml"));
@@ -46,6 +48,17 @@ private slots:
         QVERIFY2(recycled,qPrintable(error));QVERIFY(!QFileInfo::exists(target+"/debug/app.exe"));QVERIFY(!QFileInfo::exists(target+"/.rustc_info.json"));QVERIFY(QFileInfo::exists(root+"/Cargo.toml"));
 #else
         QSKIP("Native Windows directory handle ownership");
+#endif
+    }
+    void temporaryFileLockAndPartialFailurePreserveRetry(){
+#ifdef Q_OS_WIN
+        const auto plan=RustClean::inspect(target,root,{});QVERIFY(plan.valid);const auto app=QDir::toNativeSeparators(target+"/debug/app.exe");
+        HANDLE held=CreateFileW(reinterpret_cast<const wchar_t *>(app.utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);QVERIFY(held!=INVALID_HANDLE_VALUE);
+        QString error;const bool moved=RustClean::recycle(plan,root,{},error);CloseHandle(held);QVERIFY(!moved);QVERIFY(!error.isEmpty());
+        QVERIFY(QFileInfo::exists(target+"/.rustc_info.json"));const auto retry=RustClean::inspect(target,root,{});QVERIFY2(retry.valid,qPrintable(retry.error));
+        QVERIFY2(RustClean::recycle(retry,root,{},error),qPrintable(error));QVERIFY(QFileInfo::exists(root+"/Cargo.toml"));
+#else
+        QSKIP("Native Windows sharing and recycle integration");
 #endif
     }
 };

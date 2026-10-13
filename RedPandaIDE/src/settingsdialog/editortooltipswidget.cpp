@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "editortooltipswidget.h"
+#include <QCoreApplication>
 #include "ui_editortooltipswidget.h"
 #include "../settings.h"
 
@@ -23,6 +24,9 @@ EditorTooltipsWidget::EditorTooltipsWidget(const QString &name, const QString &g
     ui(new Ui::EditorTooltipsWidget)
 {
     ui->setupUi(this);
+    if(QCoreApplication::applicationName()=="RedPandaRust"){
+        ui->chkHeaderTooltips->hide();ui->chkDebugTooltips->hide();
+    }
 }
 
 EditorTooltipsWidget::~EditorTooltipsWidget()

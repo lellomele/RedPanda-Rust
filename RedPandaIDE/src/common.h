@@ -37,11 +37,11 @@ enum class CompileIssueType {
 
 struct CompileIssue {
     QString filename;
-    int line;
-    int column;
-    int endColumn;
+    int line=0;
+    int column=0;
+    int endColumn=0;
     QString description;
-    CompileIssueType type;
+    CompileIssueType type=CompileIssueType::Other;
     QString originalDescription; // Exact message before UI severity formatting.
     bool gccDiagnostic = false;
 };

@@ -20,7 +20,7 @@ signals:
     void sourceBreakpointsRequested();
     void sourceRequested(const QString &file,int line,int character);
 private:
-    struct Pending {QString kind;int epoch=0,target=0;QPointer<QPlainTextEdit> viewer;int start=0;};
+    struct Pending {QString kind;quint64 epoch=0;int target=0;QPointer<QPlainTextEdit> viewer;int start=0;};
     void resetRequests();
     void refresh();
     void stack(int thread);
@@ -45,6 +45,7 @@ private:
     QStringList mWatchList;
     QJsonArray mDataBreakpoints,mFunctionBreakpoints;
     QString mSettingsFile,mInstructionPointer,mEscape;
-    int mEpoch=0,mNextItem=1,mFrame=0,mThread=0;
+    quint64 mEpoch=0;
+    int mNextItem=1,mFrame=0,mThread=0;
 };
 #endif

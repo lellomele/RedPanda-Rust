@@ -68,6 +68,8 @@ class Editor : public QSynedit::QSynEdit
 {
     Q_OBJECT
 public:
+    void prepareForRemoval();
+    bool removing() const { return mRemoving; }
     enum class LastSymbolType {
         Identifier,
         ScopeResolutionOperator, //'::'
@@ -203,7 +205,7 @@ public:
     QString getPreviousWordAtPositionForSuggestion(const QSynedit::CharPos& p,
                                                    QSynedit::TokenType &tokenType);
     QString getPreviousWordAtPositionForCompleteFunctionDefinition(const QSynedit::CharPos& p) const;
-    void reformat(bool doReparse=true);
+    bool reformat(bool doReparse=true);
     void replaceContent(const QString &newContent, bool doReparse=true);
     void checkSyntaxInBack();
     void gotoDeclaration(const QSynedit::CharPos& pos);
@@ -338,6 +340,7 @@ public:
     void setGetMacroVarsFunc(const GetMacroVarsFunc &newGetMacroVarsFunc);
 
 signals:
+    void rustDefinitionRequested(QSynedit::CharPos position);
     void aboutToDestroy(Editor *editor);
     void rustCompletionRequested();
     void fileSaving(Editor *e, const QString& filename);
@@ -445,6 +448,7 @@ private:
 
 private:
     bool mInited;
+    bool mRemoving=false;
     QDateTime mBackupTime;
     QFile* mBackupFile;
     QByteArray mEditorEncoding; // the encoding type set by the user

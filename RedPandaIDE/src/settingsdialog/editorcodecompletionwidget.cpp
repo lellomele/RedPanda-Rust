@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "editorcodecompletionwidget.h"
+#include <QCoreApplication>
 #include "ui_editorcodecompletionwidget.h"
 #include "../settings.h"
 #include "../mainwindow.h"
@@ -27,6 +28,11 @@ EditorCodeCompletionWidget::EditorCodeCompletionWidget(const QString& name, cons
     ui(new Ui::EditorCodeCompletionWidget)
 {
     ui->setupUi(this);
+    if(QCoreApplication::applicationName()=="RedPandaRust"){
+        ui->grpEnabled->setTitle(tr("Completamento semantico Rust"));
+        ui->spinWidth->setRange(20,120);ui->spinHeight->setRange(1,30);
+        for(QWidget *widget:QList<QWidget *>{ui->chkEditorShareCodeParser,ui->chkAppendFunc,ui->chkIgnoreCases,ui->chkSortByScope,ui->widget})widget->hide();
+    }
 //    ui->chkClearWhenEditorHidden->setVisible(false);
 }
 

@@ -48,7 +48,7 @@ signals:
     void stopped(int threadId,const QString &reason);
     void finished(int code);
 private:
-    struct Pending {QString command; qint64 deadline;int generation;bool configuration=false;};
+    struct Pending {QString command; qint64 deadline;quint64 generation;bool configuration=false;};
     void connected();
     void read();
     void parse();
@@ -84,7 +84,8 @@ private:
     QProcessEnvironment mEnvironment;
     QJsonObject mCapabilities;
     qint64 mExpected=-1,mStartupDeadline=0;
-    int mSequence=1,mGeneration=0,mThread=0,mReverseTerminal=0,mConfigurationPending=0,mExitCode=-1;
+    int mSequence=1,mThread=0,mReverseTerminal=0,mConfigurationPending=0,mExitCode=-1;
+    quint64 mGeneration=0,mSessionEpoch=0;
     bool mAuthenticated=false,mConfigured=false,mStopOnEntry=false,mCompleting=false;
     State mState=State::Idle;
 #ifdef Q_OS_WIN

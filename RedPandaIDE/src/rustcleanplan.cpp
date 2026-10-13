@@ -10,6 +10,8 @@
 #include <QCryptographicHash>
 #include <QRegularExpression>
 #include <QDateTime>
+#include <QThread>
+#include <algorithm>
 #ifdef Q_OS_WIN
 #include <objbase.h>
 #endif
@@ -62,7 +64,9 @@ RustClean::Plan RustClean::inspect(const QString &target,const QString &workspac
     for(const auto &record:records){hash.addData(record.toUtf8());hash.addData("\n");}
     plan.fingerprint=hash.result();plan.valid=true;return plan;
 }
-bool RustClean::recycle(const Plan &plan,const QString &workspace,const QStringList &protectedFiles,QString &error){
+bool RustClean::recycle(const Plan &plan,const QString &workspace,const QStringList &protectedFiles,QString &error,const std::shared_ptr<std::atomic_bool> &cancel){
+    const auto cancelled=[&]{if(cancel&&cancel->load()){error="Pulizia annullata; i file già spostati restano nel Cestino.";return true;}return false;};
+    if(cancelled())return false;
     if(!plan.valid){error="Anteprima non valida.";return false;}
     const auto current=inspect(plan.target,workspace,protectedFiles);
     if(!current.valid||current.fingerprint!=plan.fingerprint){error=current.error.isEmpty()?"Gli artefatti sono cambiati dopo l'anteprima. Ripeti la pulizia.":current.error;return false;}
@@ -82,11 +86,22 @@ bool RustClean::recycle(const Plan &plan,const QString &workspace,const QStringL
         if(!remaining.valid||remaining.fingerprint!=plan.fingerprint)error="Pulizia interrotta: il contenuto è cambiato. Verifica gli artefatti e il Cestino.";
         else{
             complete=true;
-            for(const auto &path:plan.files){
-                const QFileInfo file(path);const auto expected=plan.fileState.value(path);
-                if(link(file)||!file.isFile()||file.size()!=expected.first||file.lastModified().toMSecsSinceEpoch()!=expected.second){error="Pulizia interrotta: artefatto modificato dopo l'anteprima: "+path;complete=false;break;}
-                QFile artifact(path);
-                if(!artifact.moveToTrash()){error="Pulizia interrotta; i file già spostati restano nel Cestino. "+path+": "+artifact.errorString();complete=false;break;}
+            auto files=plan.files;const auto marker=QDir(plan.target).filePath(".rustc_info.json");
+            // Keep the Cargo marker until the last successful move, so a
+            // partial failure can be inspected and retried safely.
+            std::stable_sort(files.begin(),files.end(),[&](const QString &a,const QString &b){if(a==marker)return false;if(b==marker)return true;return a<b;});
+            for(const auto &path:files){
+                if(cancelled()){complete=false;break;}
+                const auto expected=plan.fileState.value(path);bool recycled=false;QString failure;
+                for(int attempt=0;attempt<4&&!recycled;++attempt){
+                    if(cancelled()){failure=error;break;}
+                    if(attempt)QThread::msleep(100); // worker thread, bounded transient sharing retry
+                    const QFileInfo file(path);bool safe=file.canonicalFilePath().compare(path,sensitivity)==0;
+                    for(QFileInfo parent(file.absolutePath());safe;parent=QFileInfo(parent.absolutePath())){if(link(parent)){safe=false;break;}if(parent.canonicalFilePath().compare(plan.target,sensitivity)==0)break;if(QDir(parent.absoluteFilePath()).isRoot()){safe=false;break;}}
+                    if(!safe||link(file)||!file.isFile()||file.size()!=expected.first||file.lastModified().toMSecsSinceEpoch()!=expected.second){failure="Artefatto modificato dopo l'anteprima: "+path;break;}
+                    QFile artifact(path);recycled=artifact.moveToTrash();failure=artifact.errorString();
+                }
+                if(!recycled){error="Pulizia interrotta; i file già spostati restano nel Cestino. "+path+": "+failure;complete=false;break;}
             }
         }
     }

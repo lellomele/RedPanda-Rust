@@ -595,21 +595,21 @@ void QSynEdit::invalidateGutterLines(int startLine, int endLine)
     if (startLine == -1 && endLine == -1) {
         rcInval = QRect(0, 0, mGutterWidth, clientHeight());
         invalidateRect(rcInval);
-    } else if (endLine > startLine){
-        // find the visible lines first
+    } else {
         if (endLine < startLine)
             std::swap(endLine, startLine);
-        int firstRow = lineToRow(startLine);
-        int endRow;
-        if (endLine <= mDocument->count())
-            endRow = lineToRow(endLine-1);
-        else
-            endRow = mDocument->count() + mLinesInWindow + 2;
+        startLine = std::max(0, startLine);
+        if (endLine <= startLine)
+            return;
+        // find the visible lines first
+        int firstRow = lineToRow(std::min(startLine,mDocument->count()));
         // any line visible?
-        int firstLineTop = std::max((firstRow-1)*mTextHeight, mTopPos);
-        int lastLineBottom = std::min((endRow)*mTextHeight, mTopPos+clientHeight());
-        rcInval = {0, firstLineTop - mTopPos,
-                   mGutterWidth, lastLineBottom - firstLineTop};
+        const qint64 firstLineTop = std::max((qint64(firstRow)-1)*mTextHeight,qint64(mTopPos));
+        const qint64 viewportBottom=qint64(mTopPos)+clientHeight();
+        const qint64 lastLineBottom=endLine>mDocument->count()?viewportBottom:std::min(qint64(lineToRow(endLine-1))*mTextHeight,viewportBottom);
+        if(lastLineBottom<=firstLineTop)return;
+        rcInval = {0, int(firstLineTop - mTopPos),
+                   mGutterWidth, int(lastLineBottom - firstLineTop)};
         invalidateRect(rcInval);
     }
 }

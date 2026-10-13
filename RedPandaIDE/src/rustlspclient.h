@@ -58,7 +58,8 @@ private:
     void updateConfiguration();
     QJsonObject configuration() const;
     void failed(const QString &reason);
-    void clearPending();
+    bool clearPending();
+    bool resetSentVersions();
     void stopProcesses();
     bool prepareJob();
     void releaseJob();
@@ -72,6 +73,7 @@ private:
     QJsonArray mCfg;
     QJsonObject mLastConfiguration;
     int mNextId=1,mFailures=0,mNextDocumentVersion=1;
+    quint64 mGeneration=0;
     qint64 mExpected=-1,mProbeDeadline=0;
     bool mReady=false,mStarting=false,mStopping=false,mRecovering=false;
     bool mQuiescent=false;

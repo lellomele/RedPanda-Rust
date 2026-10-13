@@ -12,6 +12,9 @@
 #include <QCoreApplication>
 #include <QSet>
 #include <algorithm>
+#include <QPointer>
+#include <climits>
+#include <cmath>
 
 namespace {
 constexpr qint64 MaxFrame=16*1024*1024;
@@ -44,8 +47,10 @@ RustLspClient::RustLspClient(QObject *parent):QObject(parent){
     mIdle.setSingleShot(true);mIdle.setInterval(15000);
     connect(&mIdle,&QTimer::timeout,this,[this]{
         if(!mDocuments.isEmpty())return;
+        const QPointer<RustLspClient> self(this);const auto generation=++mGeneration;
         mRestart.stop();mConfiguration.stop();mStarting=false;mReady=false;mRecovering=true;
-        mInput.clear();mExpected=-1;clearPending();emit readyChanged(false);stopProcesses();
+        mInput.clear();mExpected=-1;stopProcesses();if(!self||generation!=mGeneration||!clearPending())return;
+        emit readyChanged(false);if(!self||generation!=mGeneration)return;
         emit status(tr("rust-analyzer: in attesa di un file Rust"));
     });
     mWatchdog.setInterval(500);mWatchdog.start();
@@ -90,18 +95,26 @@ RustLspClient::RustLspClient(QObject *parent):QObject(parent){
         if(mStarting&&mProbe.state()==QProcess::NotRunning&&mProcess.state()==QProcess::Starting&&mClock.elapsed()>mProbeDeadline){
             failed(tr("rust-analyzer: avvio del processo scaduto."));return;
         }
+        const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
         const auto keys=mRequests.keys();
         for(int id:keys){
             if(!mRequests.contains(id)||mRequests[id].deadline>mClock.elapsed())continue;
             if(mRequests[id].method=="initialize"){failed(tr("rust-analyzer: inizializzazione scaduta."));break;}
             const auto pending=mRequests.take(id);notify("$/cancelRequest",{{"id",id}});
+            if(!self||generation!=mGeneration)return;
             emit result(id,pending.method,pending.path,pending.version,QJsonValue());
+            if(!self||generation!=mGeneration)return;
         }
     });
 }
 RustLspClient::~RustLspClient(){
     mRestart.stop();mWatchdog.stop();mFlush.stop();mConfiguration.stop();mParse.stop();mIdle.stop();
-    if(mReady){send({{"id",mNextId++},{"method","shutdown"},{"params",QJsonValue::Null}});notify("exit",{});}
+    mStopping=true; // Destruction must not emit recovery callbacks.
+    disconnect(&mProcess,nullptr,this,nullptr);disconnect(&mProbe,nullptr,this,nullptr);
+    if(mReady&&mNextId<INT_MAX&&mProcess.state()==QProcess::Running){
+        const auto write=[this](QJsonObject message){message.insert("jsonrpc","2.0");const auto body=QJsonDocument(message).toJson(QJsonDocument::Compact);mProcess.write("Content-Length: "+QByteArray::number(body.size())+"\r\n\r\n"+body);};
+        write({{"id",mNextId++},{"method","shutdown"},{"params",QJsonValue::Null}});write({{"method","exit"},{"params",QJsonObject{}}});
+    }
     mStopping=true;
     mProcess.closeWriteChannel();
     if(mProcess.state()!=QProcess::NotRunning&&!mProcess.waitForFinished(300))mProcess.kill();
@@ -109,45 +122,52 @@ RustLspClient::~RustLspClient(){
 }
 int RustLspClient::version(const QString &path)const{const auto it=mDocuments.constFind(uri(path));return it==mDocuments.cend()?0:it->version;}
 int RustLspClient::updateDocument(const QString &path,const QString &text){
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    if(mStopping||mNextDocumentVersion==INT_MAX)return 0;
     if(path.isEmpty()||text.size()>MaxDocument){
-        if(!path.isEmpty())closeDocument(path);
+        if(!path.isEmpty())closeDocument(path);if(!self||generation!=mGeneration)return 0;
         emit status(tr("Analisi Rust sospesa: documento oltre 8 MiB o non salvato."));return 0;
     }
     const auto key=uri(path);const auto full=absolute(path);
     mIdle.stop();
     qsizetype total=text.size();for(auto it=mDocuments.cbegin();it!=mDocuments.cend();++it)if(it.key()!=key)total+=it->text.size();
-    if(total>32*1024*1024){closeDocument(path);emit status(tr("Limite di memoria dei documenti Rust analizzati raggiunto."));return 0;}
+    if(total>32*1024*1024){closeDocument(path);if(!self||generation!=mGeneration)return 0;emit status(tr("Limite di memoria dei documenti Rust analizzati raggiunto."));return 0;}
     if(!mDocuments.contains(key)){
         if(mDocuments.size()>=MaxDocuments){emit status(tr("Limite di 128 documenti Rust analizzati raggiunto."));return 0;}
         mDocuments.insert(key,{full,text,mNextDocumentVersion++,-1});mConfiguration.start();
     }else{
         auto &doc=mDocuments[key];
-        if(doc.text!=text){doc.text=text;doc.version=mNextDocumentVersion++;emit diagnostics(doc.path,doc.version,{});}
+        if(doc.text!=text){doc.text=text;doc.version=mNextDocumentVersion++;const auto file=doc.path;const int version=doc.version;emit diagnostics(file,version,{});}
     }
+    if(!self||generation!=mGeneration||!mDocuments.contains(key))return 0;
     if(!mRestart.isActive())ensureStarted();
-    mFlush.start();return mDocuments[key].version;
+    if(!self||generation!=mGeneration||!mDocuments.contains(key))return 0;
+    mFlush.start();return mDocuments.value(key).version;
 }
 void RustLspClient::closeDocument(const QString &path){
     const auto key=uri(path);if(!mDocuments.contains(key))return;
-    if(mReady&&mDocuments[key].sentVersion>=0)notify("textDocument/didClose",{{"textDocument",QJsonObject{{"uri",key}}}});
-    mDocuments.remove(key);mConfiguration.start();
-    const auto ids=mRequests.keys();for(int id:ids)if(mRequests[id].path==absolute(path))cancel(id);
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    const auto document=mDocuments.take(key);mConfiguration.start();
+    if(mReady&&document.sentVersion>=0)notify("textDocument/didClose",{{"textDocument",QJsonObject{{"uri",key}}}});
+    if(!self||generation!=mGeneration)return;
+    const auto ids=mRequests.keys();for(int id:ids){if(mRequests.value(id).path==absolute(path))cancel(id);if(!self||generation!=mGeneration)return;}
     if(mDocuments.isEmpty()){
         mConfiguration.stop();mIdle.start();
-        // A short idle period avoids repeatedly starting the Rust toolchain when
-        // switching files. Monotonic document versions reject late diagnostics.
         emit status(tr("rust-analyzer: nessun documento aperto"));
     }
 }
 void RustLspClient::savedDocument(const QString &path){
-    flushDocuments();if(mReady&&mDocuments.contains(uri(path)))notify("textDocument/didSave",{{"textDocument",QJsonObject{{"uri",uri(path)}}}});
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    flushDocuments();if(self&&generation==mGeneration&&mReady&&mDocuments.contains(uri(path)))notify("textDocument/didSave",{{"textDocument",QJsonObject{{"uri",uri(path)}}}});
 }
 void RustLspClient::ensureStarted(){
     if(mStopping||mSuspended||mDocuments.isEmpty()||mStarting||mReady)return;
     if(mProcess.state()!=QProcess::NotRunning||mProbe.state()!=QProcess::NotRunning){if(mRecovering)mRestart.start(300);return;}
     if(mFailures>=3)return;
     mRecovering=false;mStarting=true;mQuiescent=false;mProbeOutput.clear();mSysroot.clear();mCfg={};
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     emit status(tr("rust-analyzer: avvio dell'analisi…"));
+    if(!self||generation!=mGeneration||!mStarting||mDocuments.isEmpty())return;
     const auto rustc=RustTools::effectivePath("rustc");
     if(rustc.isEmpty()){startServer();return;}
     mProbe.setProcessEnvironment(toolEnvironment());mProbeDeadline=mClock.elapsed()+5000;
@@ -259,29 +279,32 @@ bool RustLspClient::send(QJsonObject message){
 }
 void RustLspClient::notify(const QString &method,const QJsonObject &params){send({{"method",method},{"params",params}});}
 int RustLspClient::request(const QString &method,const QJsonObject &params,const QString &path,int timeout){
-    if(mRequests.size()>=32)return 0;
+    if(mRequests.size()>=32||mNextId==INT_MAX)return 0;
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     const int id=mNextId++;const auto full=path.isEmpty()?QString():absolute(path);
     mRequests.insert(id,{method,full,full.isEmpty()?0:version(full),mClock.elapsed()+timeout});
-    if(!send({{"id",id},{"method",method},{"params",params}})){mRequests.remove(id);return 0;}return id;
+    if(!send({{"id",id},{"method",method},{"params",params}})){if(self)mRequests.remove(id);return 0;}return self&&generation==mGeneration?id:0;
 }
 void RustLspClient::flushDocuments(){
     if(!mReady)return;
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     const auto keys=mDocuments.keys();QElapsedTimer budget;budget.start();
     for(const auto &key:keys){
-        if(mDocuments[key].sentVersion==mDocuments[key].version)continue;
+        if(!mDocuments.contains(key)||mDocuments.value(key).sentVersion==mDocuments.value(key).version)continue;
         if(mProcess.bytesToWrite()>4*1024*1024||budget.elapsed()>5){mFlush.start(50);return;}
-        if(!flushDocument(key))return;
+        if(!flushDocument(key)||!self||generation!=mGeneration)return;
     }
 }
 bool RustLspClient::flushDocument(const QString &key){
     if(!mReady||!mDocuments.contains(key))return false;
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     auto &doc=mDocuments[key];if(doc.sentVersion==doc.version)return true;
     const int next=doc.version;const auto text=doc.text;const bool opened=doc.sentVersion>=0;
     doc.sentVersion=next; // send() may fail; failed() resets every sentVersion.
     if(!opened)notify("textDocument/didOpen",{{"textDocument",QJsonObject{{"uri",key},{"languageId","rust"},{"version",next},{"text",text}}}});
     else notify("textDocument/didChange",{{"textDocument",QJsonObject{{"uri",key},{"version",next}}},
         {"contentChanges",QJsonArray{QJsonObject{{"text",text}}}}});
-    return mReady;
+    return self&&generation==mGeneration&&mReady&&mDocuments.contains(key);
 }
 void RustLspClient::updateConfiguration(){
     if(!mReady||mDocuments.isEmpty())return;
@@ -292,18 +315,21 @@ void RustLspClient::updateConfiguration(){
 }
 int RustLspClient::requestAt(const QString &method,const QString &path,int line,int character,const QJsonObject &extra){
     if(!mReady||!mDocuments.contains(uri(path))||line<0||character<0)return 0;
-    if(!flushDocument(uri(path)))return 0;
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    if(!flushDocument(uri(path))||!self||generation!=mGeneration)return 0;
     auto params=extra;params.insert("textDocument",QJsonObject{{"uri",uri(path)}});params.insert("position",QJsonObject{{"line",line},{"character",character}});
     return request(method,params,path);
 }
 int RustLspClient::requestDocument(const QString &method,const QString &path,const QJsonObject &extra){
-    if(!mReady||!flushDocument(uri(path)))return 0;auto params=extra;params.insert("textDocument",QJsonObject{{"uri",uri(path)}});return request(method,params,path);
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    if(!mReady||!flushDocument(uri(path))||!self||generation!=mGeneration)return 0;auto params=extra;params.insert("textDocument",QJsonObject{{"uri",uri(path)}});return request(method,params,path);
 }
 int RustLspClient::requestWorkspace(const QString &method,const QJsonObject &params){return mReady?request(method,params):0;}
 bool RustLspClient::synchronizeAll(){
-    if(!mReady)return false;
-    if(mConfiguration.isActive()){mConfiguration.stop();updateConfiguration();}
-    flushDocuments();for(const auto &doc:mDocuments)if(doc.sentVersion!=doc.version)return false;return true;
+    if(!mReady)return false;const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    if(mConfiguration.isActive()){mConfiguration.stop();updateConfiguration();if(!self||generation!=mGeneration)return false;}
+    flushDocuments();if(!self||generation!=mGeneration||!mReady)return false;
+    for(const auto &doc:mDocuments)if(doc.sentVersion!=doc.version)return false;return true;
 }
 int RustLspClient::resolveCompletion(const QString &path,const QJsonObject &item){
     if(!mReady||!mDocuments.contains(uri(path)))return 0;
@@ -323,6 +349,7 @@ void RustLspClient::readOutput(){
     }
 }
 void RustLspClient::parseFrames(){
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     QElapsedTimer budget;budget.start();int count=0;
     while(count<16&&budget.elapsed()<5){
         if(mExpected<0){
@@ -345,9 +372,9 @@ void RustLspClient::parseFrames(){
         QJsonParseError error;const auto parsed=QJsonDocument::fromJson(body,&error);
         if(error.error!=QJsonParseError::NoError||!parsed.isObject()){failed(tr("rust-analyzer: JSON non valido."));return;}
         handleMessage(parsed.object());++count;
-        if(mRecovering||mStopping)return;
+        if(!self||generation!=mGeneration||mRecovering||mStopping)return;
     }
-    if(mProcess.bytesAvailable()>0)readOutput();
+    if(mProcess.bytesAvailable()>0)readOutput();if(!self||generation!=mGeneration)return;
     if((mExpected>=0&&mInput.size()>=mExpected)||(mExpected<0&&mInput.contains("\r\n\r\n")))mParse.start();
 }
 void RustLspClient::handleMessage(const QJsonObject &message){
@@ -382,7 +409,8 @@ void RustLspClient::handleMessage(const QJsonObject &message){
         // Unversioned diagnostics cannot be proven current for an edited buffer.
         if(!params.value("version").isDouble()&&doc.version>1)return;
         if(params.value("version").isDouble()&&params.value("version").toInt(-1)!=doc.version)return;
-        emit diagnostics(doc.path,doc.version,params.value("diagnostics").toArray());return;
+        const auto file=doc.path;const int version=doc.version;const auto items=params.value("diagnostics").toArray();
+        emit diagnostics(file,version,items);return;
     }
     if(method=="experimental/serverStatus"){
         mQuiescent=params.value("quiescent").toBool();
@@ -397,7 +425,8 @@ void RustLspClient::handleMessage(const QJsonObject &message){
     }
     if(!method.isEmpty())return;
     if(!message.value("id").isDouble())return;
-    const int id=message.value("id").toInt();if(!mRequests.contains(id))return;
+    const double numericId=message.value("id").toDouble();if(!std::isfinite(numericId)||numericId<1||numericId>INT_MAX||std::floor(numericId)!=numericId)return;
+    const int id=int(numericId);if(!mRequests.contains(id))return;
     const auto pending=mRequests.take(id);
     if(pending.method=="initialize"){
         if(message.contains("error")){failed(tr("rust-analyzer ha rifiutato l'inizializzazione."));return;}
@@ -405,43 +434,61 @@ void RustLspClient::handleMessage(const QJsonObject &message){
         const auto encoding=capabilities.value("positionEncoding").toString("utf-16");
         if(encoding!="utf-16"){failed(tr("rust-analyzer: codifica delle posizioni non supportata."));return;}
         if(!send({{"method","initialized"},{"params",QJsonObject{}}}))return;
-        mReady=true;mStarting=false;flushDocuments();if(!mReady)return;emit readyChanged(true);
+        const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+        mReady=true;mStarting=false;flushDocuments();if(!self||generation!=mGeneration||!mReady)return;emit readyChanged(true);
+        if(!self||generation!=mGeneration||!mReady)return;
         emit status(tr("rust-analyzer: sessione pronta; indicizzazione in corso…"));return;
     }
     if(!pending.path.isEmpty()&&(!mDocuments.contains(uri(pending.path))||version(pending.path)!=pending.version))return;
     emit result(id,pending.method,pending.path,pending.version,message.value("result"));
 }
-void RustLspClient::clearPending(){
+bool RustLspClient::clearPending(){
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
     const auto pending=mRequests;mRequests.clear();
-    for(auto it=pending.cbegin();it!=pending.cend();++it)if(it.value().method!="initialize")
+    for(auto it=pending.cbegin();it!=pending.cend();++it)if(it.value().method!="initialize"){
         emit result(it.key(),it.value().method,it.value().path,it.value().version,QJsonValue());
+        if(!self||generation!=mGeneration)return false;
+    }
+    return true;
+}
+bool RustLspClient::resetSentVersions(){
+    const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+    // Never retain a QHash iterator/reference across a diagnostic callback.
+    for(auto it=mDocuments.begin();it!=mDocuments.end();++it)it->sentVersion=-1;
+    const auto documents=mDocuments;
+    for(const auto &doc:documents){
+        if(version(doc.path)!=doc.version)continue;
+        emit diagnostics(doc.path,doc.version,{});
+        if(!self||generation!=mGeneration)return false;
+    }
+    return true;
 }
 void RustLspClient::failed(const QString &reason){
     if(mStopping||mRecovering)return;
+    const QPointer<RustLspClient> self(this);const auto generation=++mGeneration;
     mRecovering=true;mStarting=false;mReady=false;mQuiescent=false;mFlush.stop();mParse.stop();mInput.clear();mExpected=-1;
-    clearPending();emit readyChanged(false);
-    for(auto it=mDocuments.begin();it!=mDocuments.end();++it){it->sentVersion=-1;emit diagnostics(it->path,it->version,{});}
-    stopProcesses();
+    stopProcesses();if(!self||generation!=mGeneration||!clearPending())return;
+    emit readyChanged(false);if(!self||generation!=mGeneration||!resetSentVersions())return;
     if(mFailuresWindow.elapsed()>60000){mFailures=0;mFailuresWindow.restart();}
-    ++mFailures;emit status(reason);
+    ++mFailures;emit status(reason);if(!self||generation!=mGeneration)return;
     if(mFailures<3&&!mDocuments.isEmpty())mRestart.start(1000*(1<<(mFailures-1)));
     else emit status(tr("rust-analyzer sospeso dopo tre errori. Usa Strumenti → Riavvia rust-analyzer."));
 }
 void RustLspClient::restart(){
-    if(mStopping)return;
-    mRecovering=true;mReady=false;mStarting=false;mFailures=0;mFailuresWindow.restart();
-    mQuiescent=false;
-    mParse.stop();mInput.clear();mExpected=-1;
-    clearPending();emit readyChanged(false);stopProcesses();
-    for(auto it=mDocuments.begin();it!=mDocuments.end();++it){it->sentVersion=-1;emit diagnostics(it->path,it->version,{});}
+    if(mStopping)return;const QPointer<RustLspClient> self(this);const auto generation=++mGeneration;
+    mRecovering=true;mReady=false;mStarting=false;mFailures=0;mFailuresWindow.restart();mQuiescent=false;
+    mParse.stop();mInput.clear();mExpected=-1;stopProcesses();if(!self||generation!=mGeneration||!clearPending())return;
+    emit readyChanged(false);if(!self||generation!=mGeneration||!resetSentVersions())return;
     mRestart.start(300);
 }
 void RustLspClient::setSuspended(bool suspended){
     if(mStopping||mSuspended==suspended)return;mSuspended=suspended;
     if(!suspended){restart();return;}
+    const QPointer<RustLspClient> self(this);const auto generation=++mGeneration;
     mRecovering=true;mReady=false;mStarting=false;mQuiescent=false;
     mRestart.stop();mFlush.stop();mConfiguration.stop();mIdle.stop();mParse.stop();
-    mInput.clear();mExpected=-1;clearPending();emit readyChanged(false);stopProcesses();
+    mInput.clear();mExpected=-1;stopProcesses();if(!self||generation!=mGeneration||!clearPending())return;
+    emit readyChanged(false);if(!self||generation!=mGeneration)return;
     for(auto it=mDocuments.begin();it!=mDocuments.end();++it)it->sentVersion=-1;
     emit status(tr("rust-analyzer: sospeso durante la pulizia degli artefatti"));
 }

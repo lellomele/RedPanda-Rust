@@ -21,7 +21,13 @@
 #include <QJsonDocument>
 #include <QDialogButtonBox>
 #include <QMenu>
-namespace {constexpr int Id=Qt::UserRole,Reference=Qt::UserRole+1,Requested=Qt::UserRole+2,ParentReference=Qt::UserRole+3,Name=Qt::UserRole+4,Page=Qt::UserRole+5;}
+namespace {
+QString prompt(QWidget *parent,const QString &title,const QString &label,const QString &initial,bool &ok,const QStringList &items={}){
+    auto dialog=new QInputDialog(parent);const QPointer<QInputDialog> guard(dialog);dialog->setWindowTitle(title);dialog->setLabelText(label);
+    if(!items.isEmpty()){dialog->setComboBoxItems(items);dialog->setComboBoxEditable(false);}dialog->setTextValue(initial);
+    const int result=dialog->exec();ok=guard&&result==QDialog::Accepted;const auto value=ok?guard->textValue():QString{};if(guard)guard->deleteLater();return value;
+}
+constexpr int Id=Qt::UserRole,Reference=Qt::UserRole+1,Requested=Qt::UserRole+2,ParentReference=Qt::UserRole+3,Name=Qt::UserRole+4,Page=Qt::UserRole+5;}
 RustDebugPanel::RustDebugPanel(RustDebugSession *session,const QString &settingsFile,QWidget *parent):QWidget(parent),mSession(session),mSettingsFile(settingsFile){
     setObjectName("rustDebugPanel");auto layout=new QVBoxLayout(this);layout->setContentsMargins(4,4,4,4);
     auto tools=new QHBoxLayout;mThreads=new QComboBox(this);mThreads->setObjectName("rustDebugThreads");
@@ -78,8 +84,11 @@ RustDebugPanel::RustDebugPanel(RustDebugSession *session,const QString &settings
         if(item->data(0,Page).toInt()>0){variables(item);return;}
         if(column!=1||!mSession||mSession->state()!=RustDebugSession::State::Stopped||!mSession->capabilities().value("supportsSetVariable").toBool())return;
         const int reference=item->data(0,ParentReference).toInt();if(reference<=0)return;
-        bool ok=false;const auto value=QInputDialog::getText(this,tr("Modifica variabile"),tr("Nuovo valore di %1:").arg(item->text(0)),QLineEdit::Normal,item->text(1),&ok);
-        if(ok){const auto id=mSession->request("setVariable",{{"variablesReference",reference},{"name",item->data(0,Name).toString()},{"value",value}});if(id)mPending.insert(id,{"setVariable",mEpoch,0,{}});}
+        const auto name=item->data(0,Name).toString(),previous=item->text(1);const auto epoch=mEpoch;const QPointer<RustDebugPanel> self(this);
+        bool ok=false;const auto value=prompt(this,tr("Modifica variabile"),tr("Nuovo valore di %1:").arg(name),previous,ok);
+        if(!self||!ok||epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
+        const auto id=mSession->request("setVariable",{{"variablesReference",reference},{"name",name},{"value",value}});
+        if(self&&epoch==mEpoch&&id)mPending.insert(id,{"setVariable",mEpoch,0,{}});
     });
     connect(mWatches,&QTreeWidget::itemDoubleClicked,this,[this](QTreeWidgetItem *item){if(item->data(0,Page).toInt()>0)variables(item);});
     connect(mDataBreakpoint,&QPushButton::clicked,this,&RustDebugPanel::addDataBreakpoint);
@@ -87,10 +96,14 @@ RustDebugPanel::RustDebugPanel(RustDebugSession *session,const QString &settings
     mVariables->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(mVariables,&QTreeWidget::customContextMenuRequested,this,[this](const QPoint &point){
         const auto item=mVariables->itemAt(point);if(item)mVariables->setCurrentItem(item);
-        QMenu menu(this);auto add=menu.addAction(tr("Interrompi sull'accesso alla variabile…"));add->setEnabled(mDataBreakpoint->isEnabled()&&item&&item->data(0,ParentReference).toInt()>0);
-        auto clear=menu.addAction(tr("Rimuovi tutti i watchpoint"));clear->setEnabled(!mDataBreakpoints.isEmpty()&&mSession&&mSession->state()==RustDebugSession::State::Stopped);
-        const auto chosen=menu.exec(mVariables->viewport()->mapToGlobal(point));
-        if(chosen==add)addDataBreakpoint();else if(chosen==clear){mDataBreakpoints={};const int id=mSession->request("setDataBreakpoints",{{"breakpoints",mDataBreakpoints}});if(id)mPending.insert(id,{"dataSet",mEpoch,0,{}});}
+        auto menu=new QMenu(this);const QPointer<QMenu> guard(menu);const auto epoch=mEpoch;
+        auto add=menu->addAction(tr("Interrompi sull'accesso alla variabile…"));add->setEnabled(mDataBreakpoint->isEnabled()&&item&&item->data(0,ParentReference).toInt()>0);
+        auto clear=menu->addAction(tr("Rimuovi tutti i watchpoint"));clear->setEnabled(!mDataBreakpoints.isEmpty()&&mSession&&mSession->state()==RustDebugSession::State::Stopped);
+        connect(add,&QAction::triggered,this,[this,epoch]{if(epoch==mEpoch)addDataBreakpoint();});
+        connect(clear,&QAction::triggered,this,[this,epoch]{if(epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
+            const QPointer<RustDebugPanel> self(this);mDataBreakpoints={};const int id=mSession->request("setDataBreakpoints",{{"breakpoints",mDataBreakpoints}});if(self&&epoch==mEpoch&&id)mPending.insert(id,{"dataSet",mEpoch,0,{}});
+        });
+        menu->exec(mVariables->viewport()->mapToGlobal(point));if(guard)guard->deleteLater();
     });
     connect(refreshButton,&QPushButton::clicked,this,&RustDebugPanel::refresh);
     connect(mMemory,&QPushButton::clicked,this,&RustDebugPanel::inspectMemory);connect(mAssembly,&QPushButton::clicked,this,&RustDebugPanel::showAssembly);
@@ -108,25 +121,32 @@ RustDebugPanel::RustDebugPanel(RustDebugSession *session,const QString &settings
     });
     mThreads->setEnabled(false);mInput->setEnabled(false);mEvaluate->setEnabled(false);mMemory->setEnabled(false);mAssembly->setEnabled(false);mDataBreakpoint->setEnabled(false);
 }
-void RustDebugPanel::resetRequests(){++mEpoch;if(mSession)for(const int id:mPending.keys())mSession->cancel(id);mPending.clear();mVariablePages.clear();}
+void RustDebugPanel::resetRequests(){
+    const QPointer<RustDebugPanel> self(this);const auto epoch=++mEpoch;const auto ids=mPending.keys();mPending.clear();mVariablePages.clear();
+    for(const int id:ids){if(mSession)mSession->cancel(id);if(!self||epoch!=mEpoch)return;}
+}
 int RustDebugPanel::registerItem(QTreeWidgetItem *item){const int id=mNextItem++;item->setData(0,Id,id);mItems.insert(id,item);return id;}
 void RustDebugPanel::forgetItems(QTreeWidgetItem *item){for(int i=0;i<item->childCount();++i)forgetItems(item->child(i));const int id=item->data(0,Id).toInt();mItems.remove(id);mVariablePages.remove(id);}
 void RustDebugPanel::refresh(){
-    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;resetRequests();
+    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;const QPointer<RustDebugPanel> self(this);resetRequests();if(!self||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
     const int id=mSession->request("threads");if(id)mPending.insert(id,{"threads",mEpoch,0,{}});
 }
 void RustDebugPanel::stack(int thread){
-    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;resetRequests();mThread=thread;mSession->selectThread(thread);
+    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;const QPointer<RustDebugPanel> self(this);resetRequests();if(!self||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;mThread=thread;mSession->selectThread(thread);
     const int id=mSession->request("stackTrace",{{"threadId",thread},{"startFrame",0},{"levels",100}});if(id)mPending.insert(id,{"stack",mEpoch,0,{}});
 }
 void RustDebugPanel::selectFrame(QTreeWidgetItem *item){
-    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;resetRequests();mFrame=item->data(0,Id).toInt();
-    mInstructionPointer=item->data(0,Reference).toString();mVariables->clear();mWatches->clear();mItems.clear();
-    const auto file=item->data(1,Name).toString();const int line=item->data(2,Id).toInt()-1;
+    if(!item||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
+    const int frame=item->data(0,Id).toInt(),line=item->data(2,Id).toInt()-1;
+    const auto instruction=item->data(0,Reference).toString(),file=item->data(1,Name).toString();
+    const QPointer<RustDebugPanel> self(this);resetRequests();if(!self||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;const auto epoch=mEpoch;
+    mFrame=frame;mInstructionPointer=instruction;mVariables->clear();mWatches->clear();mItems.clear();
     if(!file.isEmpty()&&line>=0)emit sourceRequested(file,line,0);
-    int id=mSession->request("scopes",{{"frameId",mFrame}});if(id)mPending.insert(id,{"scopes",mEpoch,0,{}});
-    for(const auto &expression:mWatchList){auto watch=new QTreeWidgetItem(mWatches,{expression,tr("Valutazione…"),QString()});const int target=registerItem(watch);
-        id=mSession->request("evaluate",{{"expression",expression},{"frameId",mFrame},{"context","watch"}});if(id)mPending.insert(id,{"watch",mEpoch,target,{}});}
+    if(!self||epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
+    int id=mSession->request("scopes",{{"frameId",mFrame}});if(!self||epoch!=mEpoch)return;if(id)mPending.insert(id,{"scopes",mEpoch,0,{}});
+    const auto expressions=mWatchList;
+    for(const auto &expression:expressions){auto watch=new QTreeWidgetItem(mWatches,{expression,tr("Valutazione…"),QString()});const int target=registerItem(watch);
+        id=mSession->request("evaluate",{{"expression",expression},{"frameId",mFrame},{"context","watch"}});if(!self||epoch!=mEpoch)return;if(id)mPending.insert(id,{"watch",mEpoch,target,{}});}
 }
 void RustDebugPanel::variables(QTreeWidgetItem *item){
     if(!mSession||mSession->state()!=RustDebugSession::State::Stopped||item->data(0,Requested).toBool())return;
@@ -134,8 +154,9 @@ void RustDebugPanel::variables(QTreeWidgetItem *item){
     const int start=item->data(0,Page).toInt();const auto parent=start>0?item->parent():item;if(!parent)return;
     const int target=parent->data(0,Id).toInt();
     if(start>0&&mVariablePages.contains(target)){fillVariables(parent,mVariablePages.page(target,start),reference,start);return;}
-    const int id=mSession->request("variables",{{"variablesReference",reference}});
-    if(id)mPending.insert(id,{"variables",mEpoch,parent->data(0,Id).toInt(),{},start});else item->setData(0,Requested,false);
+    const int itemId=item->data(0,Id).toInt();const QPointer<RustDebugPanel> self(this);const auto epoch=mEpoch;
+    const int id=mSession->request("variables",{{"variablesReference",reference}});if(!self||epoch!=mEpoch)return;
+    if(id)mPending.insert(id,{"variables",mEpoch,target,{},start});else if(auto remaining=mItems.value(itemId,nullptr))remaining->setData(0,Requested,false);
 }
 void RustDebugPanel::fillVariables(QTreeWidgetItem *parent,const QJsonArray &values,int parentReference,int start){
     for(int i=parent->childCount()-1;i>=0;--i)if(start==0||parent->child(i)->data(0,Page).toInt()>0){auto child=parent->takeChild(i);forgetItems(child);delete child;}
@@ -184,8 +205,8 @@ void RustDebugPanel::receive(int id,const QString &,const QJsonObject &body,bool
         const auto data=body.value("dataId").toString();if(data.isEmpty()){appendOutput(tr("La variabile non supporta un watchpoint.\n"));return;}
         QStringList access;for(const auto &value:body.value("accessTypes").toArray())if(QSet<QString>{"read","write","readWrite"}.contains(value.toString()))access.append(value.toString());
         if(access.isEmpty())access.append("write");bool ok=false;
-        const auto type=QInputDialog::getItem(this,tr("Watchpoint"),tr("Interrompi su:"),access,qMax(0,access.indexOf("write")),false,&ok);
-        if(!ok||pending.epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
+        const QPointer<RustDebugPanel> self(this);const auto type=prompt(this,tr("Watchpoint"),tr("Interrompi su:"),access.value(qMax(0,access.indexOf("write"))),ok,access);
+        if(!self||!ok||pending.epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;
         QJsonArray next=mDataBreakpoints;bool duplicate=false;for(const auto &value:next)if(value.toObject().value("dataId")==data)duplicate=true;
         if(!duplicate&&next.size()<16)next.append(QJsonObject{{"dataId",data},{"accessType",type}});mDataBreakpoints=next;
         const int id=mSession->request("setDataBreakpoints",{{"breakpoints",next}});if(id)mPending.insert(id,{"dataSet",mEpoch,0,{}});
@@ -205,15 +226,16 @@ void RustDebugPanel::saveWatches(){QSettings settings(mSettingsFile,QSettings::I
 void RustDebugPanel::addDataBreakpoint(){
     if(!mSession||mSession->state()!=RustDebugSession::State::Stopped||!mSession->capabilities().value("supportsDataBreakpoints").toBool())return;
     const auto item=mVariables->currentItem();if(!item||item->data(0,ParentReference).toInt()<=0){appendOutput(tr("Seleziona una variabile locale per impostare il watchpoint.\n"));return;}
+    const int target=item->data(0,Id).toInt();const auto epoch=mEpoch;const QPointer<RustDebugPanel> self(this);
     const int id=mSession->request("dataBreakpointInfo",{{"variablesReference",item->data(0,ParentReference).toInt()},{"name",item->data(0,Name).toString()},{"frameId",mFrame}});
-    if(id)mPending.insert(id,{"dataInfo",mEpoch,item->data(0,Id).toInt(),{}});
+    if(self&&epoch==mEpoch&&id)mPending.insert(id,{"dataInfo",mEpoch,target,{}});
 }
 void RustDebugPanel::configureFunctionBreakpoints(){
     if(!mSession||(mSession->active()&&mSession->state()!=RustDebugSession::State::Stopped))return;
-    QDialog dialog(this);dialog.setWindowTitle(tr("Breakpoint sulle funzioni Rust"));dialog.resize(700,450);auto layout=new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(tr("Un nome completo per riga, ad esempio mio_crate::modulo::funzione.\nI breakpoint vengono mantenuti tra le sessioni."),&dialog));auto text=new QPlainTextEdit(&dialog);text->setObjectName("rustFunctionNames");QStringList names;for(const auto &entry:mFunctionBreakpoints)names.append(entry.toObject().value("name").toString());text->setPlainText(names.join('\n'));layout->addWidget(text);
-    auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-    if(dialog.exec()!=QDialog::Accepted)return;QJsonArray next;QSet<QString> distinct;
+    const QPointer<RustDebugPanel> self(this);auto dialog=new QDialog(this);const QPointer<QDialog> guard(dialog);dialog->setWindowTitle(tr("Breakpoint sulle funzioni Rust"));dialog->resize(700,450);auto layout=new QVBoxLayout(dialog);
+    layout->addWidget(new QLabel(tr("Un nome completo per riga, ad esempio mio_crate::modulo::funzione.\nI breakpoint vengono mantenuti tra le sessioni."),dialog));auto text=new QPlainTextEdit(dialog);text->setObjectName("rustFunctionNames");QStringList names;for(const auto &entry:mFunctionBreakpoints)names.append(entry.toObject().value("name").toString());text->setPlainText(names.join('\n'));layout->addWidget(text);
+    auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,dialog);layout->addWidget(buttons);connect(buttons,&QDialogButtonBox::accepted,dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,dialog,&QDialog::reject);
+    const int result=dialog->exec();if(guard)guard->deleteLater();if(!self||!guard||result!=QDialog::Accepted||!mSession||(mSession->active()&&mSession->state()!=RustDebugSession::State::Stopped))return;QJsonArray next;QSet<QString> distinct;
     for(const auto &line:text->toPlainText().split('\n')){const auto name=line.trimmed();if(name.isEmpty()||distinct.contains(name))continue;if(name.size()>4096||next.size()>=100){appendOutput(tr("Usa al massimo 100 nomi di funzione, lunghi fino a 4096 caratteri.\n"));return;}distinct.insert(name);next.append(QJsonObject{{"name",name}});}
     QSettings settings(mSettingsFile,QSettings::IniFormat);settings.setValue("RustDebugger/functions",QJsonDocument(next).toJson(QJsonDocument::Compact));settings.sync();if(settings.status()!=QSettings::NoError){appendOutput(tr("Impossibile salvare i breakpoint sulle funzioni.\n"));return;}
     mFunctionBreakpoints=next;mSession->setFunctionBreakpoints(next);
@@ -238,9 +260,9 @@ void RustDebugPanel::showAssembly(){
     if(id)mPending.insert(id,{"assembly",mEpoch,0,text});
 }
 void RustDebugPanel::inspectMemory(){
-    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;bool ok=false;
-    const auto address=QInputDialog::getText(this,tr("Memoria"),tr("Indirizzo o riferimento di memoria:"),QLineEdit::Normal,mInstructionPointer,&ok);
-    if(!ok||address.trimmed().isEmpty())return;auto dialog=new QDialog(this);dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setWindowTitle(tr("Memoria Rust"));dialog->resize(750,500);
+    if(!mSession||mSession->state()!=RustDebugSession::State::Stopped)return;bool ok=false;const QPointer<RustDebugPanel> self(this);const auto epoch=mEpoch;
+    const auto address=prompt(this,tr("Memoria"),tr("Indirizzo o riferimento di memoria:"),mInstructionPointer,ok);
+    if(!self||!ok||epoch!=mEpoch||!mSession||mSession->state()!=RustDebugSession::State::Stopped||address.trimmed().isEmpty())return;auto dialog=new QDialog(this);dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setWindowTitle(tr("Memoria Rust"));dialog->resize(750,500);
     auto layout=new QVBoxLayout(dialog);auto text=new QPlainTextEdit(dialog);text->setReadOnly(true);layout->addWidget(text);dialog->show();
     const int id=mSession->request("readMemory",{{"memoryReference",address.trimmed()},{"count",1024}});if(id)mPending.insert(id,{"memory",mEpoch,0,text});
 }

@@ -7,6 +7,8 @@ if(WIN32)
 endif()
 set_target_properties(RedPandaIDE PROPERTIES OUTPUT_NAME RedPandaRust)
 target_sources(RedPandaIDE PRIVATE src/mainwindowrust.cpp)
+target_sources(RedPandaIDE PRIVATE src/rustoutlinemodel.cpp src/rustoutlinemodel.h)
+target_sources(RedPandaIDE PRIVATE src/reformatter/rustformatter.cpp src/reformatter/rustformatter.h)
 target_sources(RedPandaIDE PRIVATE src/rustcleanplan.cpp src/rustcleandialog.cpp src/rustcleandialog.h)
 option(REDPANDA_UI_CHECKS "Include development UI checks in the IDE executable" OFF)
 if(REDPANDA_UI_CHECKS)
@@ -291,6 +293,8 @@ target_qt_plain_cpp(test-editor
     src/systemconsts
     src/compiler/compilerinfo
     src/reformatter/basereformatter
+    src/reformatter/rustformatter
+    src/rusttools
     )
 
 target_moc_classes(test-editor

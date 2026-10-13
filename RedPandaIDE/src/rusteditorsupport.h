@@ -11,6 +11,7 @@
 #include "rustlspclient.h"
 class Editor;
 class QListWidget;
+namespace QSynedit {struct CharPos;}
 
 class RustEditorSupport final : public QObject {
     Q_OBJECT
@@ -28,6 +29,7 @@ private:
     void dismiss();
     void hover();
     void signatureHelp();
+    void definitionAt(const QSynedit::CharPos &position);
     void receive(int id,const QString &method,const QString &path,int version,const QJsonValue &value);
     void showCompletions(const QJsonValue &value);
     void acceptCompletion();

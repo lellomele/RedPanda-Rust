@@ -806,7 +806,7 @@ void MainWindow::updateEditorActions(const Editor *e)
 
         //code
         ui->actionReformat_Code->setEnabled(isCFile(e->filename()) || isHFile(e->filename()));
-        ui->actionReparse_Code->setEnabled(e->inProject() || isCFile(e->filename()) || isHFile(e->filename()));
+        ui->actionReparse_Code->setEnabled((mRustLanguageClient&&e->fileType()==FileType::RustSource)||e->inProject() || isCFile(e->filename()) || isHFile(e->filename()));
 
         ui->actionClose->setEnabled(true);
         ui->actionClose_All->setEnabled(true);
@@ -825,15 +825,16 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionInsert_Complete_Snippet->setEnabled(!e->readOnly());
 
         //rename symbol needs parser
-        ui->actionRename_Symbol->setEnabled(e->parser() != nullptr);
+        ui->actionRename_Symbol->setEnabled((mRustNavigation&&e->fileType()==FileType::RustSource&&!e->readOnly())||e->parser() != nullptr);
 
         ui->actionLocate_in_Files_View->setEnabled(!e->isNew());
         ui->actionToggle_Readonly->setEnabled(!e->modified());
 
         //these actions needs parser
-        ui->actionGoto_Declaration->setEnabled(e->parser()!=nullptr);
-        ui->actionGoto_Definition->setEnabled(e->parser()!=nullptr);
-        ui->actionFind_references->setEnabled(e->parser()!=nullptr);
+        const bool semantic=(mRustLanguageClient&&e->fileType()==FileType::RustSource&&!e->isNew())||e->parser()!=nullptr;
+        ui->actionGoto_Declaration->setEnabled(semantic);
+        ui->actionGoto_Definition->setEnabled(semantic);
+        ui->actionFind_references->setEnabled(semantic);
         ui->actionMove_To_Other_View->setEnabled(editorManager()->pageCount()>1);
 
         ui->actionC_C_Header->setEnabled(true);
@@ -890,7 +891,7 @@ void MainWindow::updateCompileActions(const Editor *e)
         ui->actionMakeClean->setEnabled(false);
         ui->actionStop_Execution->setEnabled(busy);
         ui->actionDebug->setEnabled(!busy&&e);
-        ui->actionReformat_Code->setEnabled(!busy && e);
+        ui->actionReformat_Code->setEnabled(!busy && e && !e->readOnly());
         ui->actionGenerate_Assembly->setEnabled(!busy&&e);ui->actionGenerate_GIMPLE->setEnabled(!busy&&e);
         ui->actionRun_Parameters->setEnabled(!busy);ui->actionCompiler_Options->setEnabled(!busy);
         for(auto action:findChildren<QAction *>())if(action->objectName().startsWith("rust-command-"))action->setEnabled(!busy);
@@ -1180,8 +1181,14 @@ void MainWindow::applySettings()
         mIconsManager->prepareCustomIconSet(customIconSetFolder);
         mIconsManager->setIconSetsFolder(customIconSetFolder);
     }
+    // Keep colored symbol categories with the default dark action icon set.
+    // Explicit custom sets retain their own parser artwork.
+    const auto parserIconSet = QCoreApplication::applicationName()=="RedPandaRust"
+            && !pSettings->environment().useCustomIconSet()
+            && pSettings->environment().iconSet()=="contrast"
+            ? QString("newlook") : pSettings->environment().iconSet();
     mIconsManager->updateParserIcons(
-                pSettings->environment().iconSet(),
+                parserIconSet,
                 calIconSize(
                     pSettings->environment().interfaceFont(),
                     pSettings->environment().interfaceFontSize()));
@@ -1869,6 +1876,7 @@ void MainWindow::openFiles(const QStringList &files)
 
 Editor* MainWindow::openFile(QString filename, bool activate, FileType fileType, const QString& contextFile)
 {
+    const QPointer<MainWindow> self(this);
     QFileInfo info=QFileInfo(filename);
     if (info.isDir())
         return nullptr;
@@ -1876,7 +1884,7 @@ Editor* MainWindow::openFile(QString filename, bool activate, FileType fileType,
     if (info.isAbsolute())
         filename = info.absoluteFilePath();
 
-    Editor* editor = mEditorManager->getOpenedEditor(filename);
+    QPointer<Editor> editor = mEditorManager->getOpenedEditor(filename);
     if (editor!=nullptr) {
         editor->setContextFile(contextFile);
         if (fileType != FileType::None)
@@ -1884,12 +1892,12 @@ Editor* MainWindow::openFile(QString filename, bool activate, FileType fileType,
         if (activate) {
             mEditorManager->activeEditor(editor,true);
         }
-        return editor;
+        return editor&&!editor->removing()?editor.data():nullptr;
     }
     if (!fileExists(filename))
         return nullptr;
     try {
-        Editor* oldEditor=nullptr;
+        QPointer<Editor> oldEditor;
         if (mEditorManager->pageCount()==1) {
             oldEditor = mEditorManager->getEditor(0);
             if (!oldEditor->isNew() || oldEditor->modified()) {
@@ -1910,24 +1918,33 @@ Editor* MainWindow::openFile(QString filename, bool activate, FileType fileType,
                                         fileType, contextFile,
                                         inProject, false, nullptr);
 
+        if(!self||!editor||editor->removing())return nullptr;
         if (activate) {
             mEditorManager->activeEditor(editor,true);
+            if(!self||!editor||editor->removing())return nullptr;
             editor->reparseIfNeeded();
         } else {
             updateEditorActions();
         }
-        if (mEditorManager->pageCount()>1 && oldEditor)
+        if(!self||!editor||editor->removing())return nullptr;
+        if (mEditorManager->pageCount()>1 && oldEditor&&!oldEditor->removing())
             mEditorManager->closeEditor(oldEditor);
 //        editor->activate();
-        return editor;
+        return self&&editor&&!editor->removing()?editor.data():nullptr;
     } catch (FileError e) {
-        QMessageBox::critical(this,tr("Error"),e.reason());
+        if(self)QMessageBox::critical(this,tr("Error"),e.reason());
     }
     return nullptr;
 }
 
 void MainWindow::openProject(QString filename, bool openFiles)
 {
+    if(mRustWorkspace){
+        if(QFileInfo(filename).fileName().compare("Cargo.toml",Qt::CaseInsensitive)!=0){statusBar()->showMessage(tr("Per un progetto Rust apri il manifest Cargo.toml."),12000);return;}
+        const QPointer<MainWindow> self(this);mRustRoot=QFileInfo(filename).absolutePath();setFilesViewRoot(mRustRoot);openFile(filename);if(!self)return;
+        if(openFiles){const auto main=QDir(mRustRoot).filePath("src/main.rs"),library=QDir(mRustRoot).filePath("src/lib.rs");if(QFileInfo::exists(main))openFile(main);else if(QFileInfo::exists(library))openFile(library);}
+        return;
+    }
     mOpeningProject=true;
     auto action=finally([this]{
         mOpeningProject=false;
@@ -2750,7 +2767,7 @@ void MainWindow::debug()
             inferior=mProject->options().hostApplication;
             inferiorHasSymbols = false;
         }
-        QDir::fromNativeSeparators(inferior);
+        inferior=QDir::fromNativeSeparators(inferior);
         if (!mDebugger->startClient(
                     mProject->options().compilerSet,
                     inferior,
@@ -5118,23 +5135,29 @@ void MainWindow::onClassBrowserGotoDefinition()
 
 void MainWindow::onClassBrowserShowInherited()
 {
+    const QPointer<MainWindow> self(this);
     pSettings->ui().setClassBrowserShowInherited(mClassBrowser_Show_Inherited->isChecked());
-    pSettings->ui().save();
-    mClassBrowserModel->fillStatements();
+    if(mRustNavigation)mRustNavigation->setOutlineOptions(pSettings->ui().classBrowserSortAlpha(),pSettings->ui().classBrowserSortType(),pSettings->ui().classBrowserShowInherited());
+    else mClassBrowserModel->fillStatements();
+    if(!self)return;try{pSettings->ui().save();}catch(const BaseError &error){qWarning()<<"Structure preferences not saved:"<<error.reason();statusBar()->showMessage(tr("Impossibile salvare le preferenze Struttura: %1").arg(error.reason()),10000);}
 }
 
 void MainWindow::onClassBrowserSortByType()
 {
+    const QPointer<MainWindow> self(this);
     pSettings->ui().setClassBrowserSortType(mClassBrowser_Sort_By_Type->isChecked());
-    pSettings->ui().save();
-    mClassBrowserModel->fillStatements();
+    if(mRustNavigation)mRustNavigation->setOutlineOptions(pSettings->ui().classBrowserSortAlpha(),pSettings->ui().classBrowserSortType(),pSettings->ui().classBrowserShowInherited());
+    else mClassBrowserModel->fillStatements();
+    if(!self)return;try{pSettings->ui().save();}catch(const BaseError &error){qWarning()<<"Structure preferences not saved:"<<error.reason();statusBar()->showMessage(tr("Impossibile salvare le preferenze Struttura: %1").arg(error.reason()),10000);}
 }
 
 void MainWindow::onClassBrowserSortByName()
 {
+    const QPointer<MainWindow> self(this);
     pSettings->ui().setClassBrowserSortAlpha(mClassBrowser_Sort_By_Name->isChecked());
-    pSettings->ui().save();
-    mClassBrowserModel->fillStatements();
+    if(mRustNavigation)mRustNavigation->setOutlineOptions(pSettings->ui().classBrowserSortAlpha(),pSettings->ui().classBrowserSortType(),pSettings->ui().classBrowserShowInherited());
+    else mClassBrowserModel->fillStatements();
+    if(!self)return;try{pSettings->ui().save();}catch(const BaseError &error){qWarning()<<"Structure preferences not saved:"<<error.reason();statusBar()->showMessage(tr("Impossibile salvare le preferenze Struttura: %1").arg(error.reason()),10000);}
 }
 
 void MainWindow::onClassBrowserChangeScope()
@@ -5440,34 +5463,44 @@ void MainWindow::onEditorLeftTabContextMenu(const QPoint& pos)
 
 void MainWindow::onEditorTabContextMenu(QTabWidget* tabWidget, const QPoint &pos)
 {
-    int index = tabWidget->tabBar()->tabAt(pos);
-    if (index<0)
+    if (!tabWidget)
+        return;
+    const QPointer<MainWindow> self(this);
+    const QPointer<QTabWidget> tabs(tabWidget);
+    const int index = tabWidget->tabBar()->tabAt(pos);
+    if (index < 0)
+        return;
+    const QPointer<Editor> editor(qobject_cast<Editor *>(tabWidget->widget(index)));
+    if (!editor)
         return;
     tabWidget->setCurrentIndex(index);
-    QMenu menu(this);
-    QTabBar* tabBar = tabWidget->tabBar();
-    Editor * editor = dynamic_cast<Editor *>(tabWidget->widget(index));
+    // Tab activation can close or move the target through synchronous slots.
+    if (!self || !tabs || !editor || tabs->currentWidget()!=editor)
+        return;
+    const QPoint globalPoint=tabs->tabBar()->mapToGlobal(pos);
+    auto menu=new QMenu(this);
+    const QPointer<QMenu> guard(menu);
     if (!switchHeaderSourceTarget(editor).isEmpty()) {
-        menu.addAction(ui->actionSwitchHeaderSource);
-        menu.addSeparator();
+        menu->addAction(ui->actionSwitchHeaderSource);
+        menu->addSeparator();
     }
-    menu.addAction(ui->actionClose);
-    menu.addAction(ui->actionClose_All);
-    menu.addAction(ui->actionClose_Others);
-    menu.addSeparator();
-    menu.addAction(ui->actionToggle_Readonly);
-    menu.addSeparator();
-    menu.addAction(ui->actionOpen_Containing_Folder);
-    menu.addAction(ui->actionOpen_Terminal);
-    menu.addAction(ui->actionLocate_in_Files_View);
-    menu.addSeparator();
-    menu.addAction(ui->actionMove_To_Other_View);
-    menu.addSeparator();
-    menu.addAction(ui->actionFile_Properties);
-    if (editor ) {
-        ui->actionLocate_in_Files_View->setEnabled(!editor->isNew());
-    }
-    menu.exec(tabBar->mapToGlobal(pos));
+    menu->addAction(ui->actionClose);
+    menu->addAction(ui->actionClose_All);
+    menu->addAction(ui->actionClose_Others);
+    menu->addSeparator();
+    menu->addAction(ui->actionToggle_Readonly);
+    menu->addSeparator();
+    menu->addAction(ui->actionOpen_Containing_Folder);
+    menu->addAction(ui->actionOpen_Terminal);
+    menu->addAction(ui->actionLocate_in_Files_View);
+    menu->addSeparator();
+    menu->addAction(ui->actionMove_To_Other_View);
+    menu->addSeparator();
+    menu->addAction(ui->actionFile_Properties);
+    ui->actionLocate_in_Files_View->setEnabled(!editor->isNew());
+    menu->exec(globalPoint);
+    if (guard)
+        guard->deleteLater();
 }
 
 void MainWindow::disableDebugActions()
@@ -7339,6 +7372,7 @@ void MainWindow::on_actionGoto_Definition_triggered()
 
 void MainWindow::on_actionFind_references_triggered()
 {
+    if(mRustNavigation){mRustNavigation->references();return;}
     Editor * editor = mEditorManager->getEditor();
     if (editor) {
         CppRefacter refactor(this);
@@ -8215,6 +8249,8 @@ void MainWindow::reparseNonProjectEditors()
 
 QString MainWindow::switchHeaderSourceTarget(Editor *editor)
 {
+    if (!editor)
+        return {};
     QString filename=editor->filename();
     if (isC_CPPHeaderFile(editor->fileType())) {
         QStringList lst;
@@ -8666,6 +8702,7 @@ void MainWindow::on_actionAbout_triggered()
 
 void MainWindow::on_actionRename_Symbol_triggered()
 {
+    if(mRustNavigation){mRustNavigation->rename();return;}
     Editor * editor = mEditorManager->getEditor();
     if (!editor)
         return;
@@ -11154,6 +11191,7 @@ OJProblemSetModel *MainWindow::getOJProblemSetModel() const
 
 void MainWindow::on_actionReparse_Code_triggered()
 {
+    if(mRustLanguageClient){mRustLanguageClient->restart();return;}
     Editor * e = mEditorManager->getEditor();
     if (!e) {
         if (mProject && mProject->cppParser()) {

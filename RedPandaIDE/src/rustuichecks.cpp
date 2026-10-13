@@ -47,6 +47,7 @@
 #include <QToolTip>
 #include <QListWidget>
 #include <QTreeWidget>
+#include <QTreeView>
 #include <QDialogButtonBox>
 #include <QInputDialog>
 #include <QHeaderView>
@@ -54,7 +55,9 @@
 #include <QPersistentModelIndex>
 #include <QContextMenuEvent>
 #include <QMenu>
+#include <QUrl>
 #include <QtTest>
+#include <limits>
 #include <qsynedit/syntaxer/rust.h>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -70,6 +73,10 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
     modalCloser.start();
     QJsonArray checks;int failed=0;
     const auto check=[&](const QString &name,bool ok){qInfo().noquote()<<"RUST_UI_CHECK"<<name<<(ok?"PASS":"FAIL");checks.append(QJsonObject{{"name",name},{"passed",ok}});if(!ok)++failed;};
+    const int savedEditorFont=pSettings->editor().fontSize(),savedUiFont=pSettings->environment().interfaceFontSize();const auto savedZoom=pSettings->environment().iconZoomFactor();
+    pSettings->editor().setFontSize(INT_MAX);pSettings->environment().setInterfaceFontSize(INT_MIN);pSettings->environment().setIconZoomFactor(std::numeric_limits<double>::quiet_NaN());
+    check("Corrupt font and icon values are bounded",pSettings->editor().fontSize()==72&&pSettings->environment().interfaceFontSize()==6&&pSettings->environment().iconZoomFactor()==1.0);
+    pSettings->editor().setFontSize(savedEditorFont);pSettings->environment().setInterfaceFontSize(savedUiFont);pSettings->environment().setIconZoomFactor(savedZoom);
     const auto put=[](const QString &path,const QByteArray &content){
         // Test-side external writers can race a background source reader on
         // Windows. Retry an atomic replacement, preserving the old file.
@@ -82,35 +89,65 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
     if(!outlineSource.isEmpty()){
         const auto phase=qEnvironmentVariable("RUST_OUTLINE_CHECK_PHASE");
         if(phase=="resume"){
+            const auto name=findChild<QAction *>("rustOutlineSortName"),type=findChild<QAction *>("rustOutlineSortType"),traits=findChild<QAction *>("rustOutlineShowTraits");
+            check("Structure preferences survive restart",name&&type&&traits&&name->isChecked()&&type->isChecked()&&!traits->isChecked());
             check("Interrupted session restores open file",mEditorManager->getOpenedEditor(outlineSource)!=nullptr);
             check("Interrupted session restores working folder",QDir::cleanPath(pSettings->environment().currentFolder())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
             check("Interrupted session restores process working directory",QDir::cleanPath(QDir::currentPath())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
         }
         setFilesViewRoot(QFileInfo(outlineSource).absolutePath(),true);
         auto editor=openFile(outlineSource);
-        auto outline=findChild<QTreeWidget *>("rustOutline");
+        auto outline=findChild<QTreeView *>("rustOutline");
+        auto model=mRustNavigation?mRustNavigation->outlineModel():nullptr;
+        const std::function<QModelIndex(const QString &,const QModelIndex &)> findSymbol=[&](const QString &name,const QModelIndex &parent)->QModelIndex{
+            if(!model)return {};for(int row=0;row<model->rowCount(parent);++row){const auto index=model->index(row,0,parent);if(model->data(index,RustOutlineModel::NameRole)==name)return index;const auto child=findSymbol(name,index);if(child.isValid())return child;}return {};
+        };
         check("Reported Rust file opens",editor&&outline);
         if(editor&&outline){
             ui->tabExplorer->setCurrentWidget(ui->tabStructure);
-            for(int cycle=0;cycle<20;++cycle){
-                QTreeWidgetItem *target=nullptr;QElapsedTimer deadline;deadline.start();
-                while(!target&&deadline.elapsed()<45000){
-                    for(QTreeWidgetItemIterator it(outline);*it;++it)if((*it)->text(0)=="set"){target=*it;break;}
-                    if(!target)QTest::qWait(25);
+            int completed=0;
+            for(int attempt=0;attempt<60&&completed<20;++attempt){
+                QModelIndex target;QElapsedTimer deadline;deadline.start();
+                while(!target.isValid()&&deadline.elapsed()<45000){
+                    target=findSymbol("set",{});if(!target.isValid())QTest::qWait(25);
                 }
-                check(QString("ContaLitri::set exists %1").arg(cycle),target!=nullptr);
-                if(!target)break;
-                const auto position=target->data(0,Qt::UserRole).toJsonObject();
-                const QPersistentModelIndex index(outline->indexFromItem(target));
-                outline->expandAll();outline->scrollToItem(target);outline->setCurrentItem(target);outline->setFocus();QTest::qWait(30);
+                check(QString("ContaLitri::set exists %1").arg(completed),target.isValid());if(!target.isValid())break;
+                const auto position=model->location(target);const QPersistentModelIndex index(target);
+                outline->expandAll();outline->scrollTo(target);outline->setCurrentIndex(target);outline->setFocus();QTest::qWait(30);
                 if(!index.isValid()){check("Outline refresh invalidates test index safely",true);continue;}
                 const auto point=outline->visualRect(index).center();
                 // QTest's double-click event does not include the preceding
                 // press/release needed by QAbstractItemView's pressed index.
-                QTest::mouseClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);
-                QTest::mouseDClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);QTest::qWait(30);
-                check(QString("Structure double click reaches set %1").arg(cycle),editor->caretY()==position.value("line").toInt(-1)&&editor->caretX()==position.value("character").toInt(-1));
-                check(QString("Source unchanged after navigation %1").arg(cycle),!editor->modified());
+                if(completed%4==3)QTest::keyClick(outline,Qt::Key_Return);else {QTest::mouseClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);QTest::mouseDClick(outline->viewport(),Qt::LeftButton,Qt::NoModifier,point);}QTest::qWait(30);
+                check(QString("Structure activation reaches set %1").arg(completed),editor->caretY()==position.line&&editor->caretX()==position.character);
+                check(QString("Source unchanged after navigation %1").arg(completed),!editor->modified());++completed;
+            }
+            check("Twenty actual structure activations completed",completed==20);
+            check("Class icon restored",!model->data(findSymbol("ContaLitri",{}),Qt::DecorationRole).value<QIcon>().isNull());
+            check("Method icon restored",!model->data(findSymbol("set",{}),Qt::DecorationRole).value<QIcon>().isNull());
+            check("Field icon restored",!model->data(findSymbol("counter",{}),Qt::DecorationRole).value<QIcon>().isNull());
+            const auto colored=[&](const QString &name,int minimumHue,int maximumHue){
+                const auto pixels=model->data(findSymbol(name,{}),Qt::DecorationRole).value<QIcon>().pixmap(32,32).toImage();int count=0;
+                for(int y=0;y<pixels.height();++y)for(int x=0;x<pixels.width();++x){const auto c=pixels.pixelColor(x,y);if(c.alpha()>200&&c.hsvSaturation()>100&&c.hue()>=minimumHue&&c.hue()<=maximumHue)++count;}return count>50;
+            };
+            check("Class icon has blue category color",colored("ContaLitri",180,260));
+            check("Field icon has red category color",colored("counter",0,25));
+            check("Method icon has category color",colored("set",0,359));
+            check("Structure header matches original layout",outline->isHeaderHidden());
+            check("Structure icons follow tree font size",outline->iconSize()==QSize(qMax(8,outline->fontMetrics().capHeight()+2),qMax(8,outline->fontMetrics().capHeight()+2))&&outline->iconSize().height()<=outline->fontMetrics().height());
+            const int oldFontSize=pSettings->environment().interfaceFontSize();int smallIcon=0,largeIcon=0;
+            for(const int fontSize:{8,18}){pSettings->environment().setInterfaceFontSize(fontSize);applySettings();QTest::qWait(30);
+                const int wanted=qMax(8,outline->fontMetrics().capHeight()+2);check(QString("Structure icon tracks preference font %1").arg(fontSize),outline->iconSize()==QSize(wanted,wanted));if(fontSize==8)smallIcon=wanted;else largeIcon=wanted;
+            }
+            check("Structure icon grows proportionally with font",smallIcon<largeIcon);pSettings->environment().setInterfaceFontSize(oldFontSize);applySettings();
+            const auto names=[&](const QModelIndex &parent){QStringList result;for(int row=0;row<model->rowCount(parent);++row)result.append(model->data(model->index(row,0,parent),RustOutlineModel::NameRole).toString());return result;};
+            auto sortName=findChild<QAction *>("rustOutlineSortName"),sortType=findChild<QAction *>("rustOutlineSortType");
+            check("Existing sort controls connected",sortName&&sortType);
+            if(sortName&&sortType){
+                sortName->setChecked(false);sortType->setChecked(false);mRustNavigation->setOutlineOptions(false,false,true);const auto orderedSource=names(findSymbol("ContaLitri",{}));
+                sortName->trigger();const auto alpha=names(findSymbol("ContaLitri",{}));auto expected=orderedSource;std::sort(expected.begin(),expected.end(),[](const QString&a,const QString&b){return a.compare(b,Qt::CaseInsensitive)<0;});check("Sort name button changes tree alphabetically",alpha==expected&&alpha!=orderedSource);
+                sortType->trigger();const auto typed=names(findSymbol("ContaLitri",{}));check("Sort type button groups fields after methods",!typed.isEmpty()&&typed.last()=="counter");
+                sortName->trigger();sortType->trigger();check("Sort buttons restore source order",names(findSymbol("ContaLitri",{}))==orderedSource);
             }
         }
         QTest::qWait(1200);
@@ -121,20 +158,60 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
         check("Working folder persisted before closing",QDir::cleanPath(state.value("workingFolder").toString())==QDir::cleanPath(QFileInfo(outlineSource).absolutePath()));
         bool recorded=false;for(const auto &entry:state.value("files").toArray())if(QFileInfo(entry.toObject().value("filename").toString()).absoluteFilePath()==QFileInfo(outlineSource).absoluteFilePath())recorded=true;
         check("Saved source path persisted before closing",recorded);
-        if(outline){const auto before=editor?editor->caretXY():QSynedit::CharPos{};outline->itemActivated(nullptr,0);check("Null outline activation is harmless",!editor||editor->caretXY()==before);}
+        if(outline){const auto before=editor?editor->caretXY():QSynedit::CharPos{};outline->activated({});check("Invalid outline activation is harmless",!editor||editor->caretXY()==before);}
+        if(phase=="persist"||phase=="interrupt"){
+            auto name=findChild<QAction *>("rustOutlineSortName"),type=findChild<QAction *>("rustOutlineSortType"),traits=findChild<QAction *>("rustOutlineShowTraits");
+            if(name&&!name->isChecked())name->trigger();if(type&&!type->isChecked())type->trigger();if(traits&&traits->isChecked())traits->trigger();
+            check("Structure preference journal commits",pSettings->sync()==QSettings::NoError);
+        }
         QFile report(outputDir+"/checks.json");if(report.open(QIODevice::WriteOnly))report.write(QJsonDocument(QJsonObject{{"failed",failed},{"checks",checks}}).toJson());
         report.close();
-        grab().save(outputDir+"/outline.png");
+        if(outline)outline->expandAll();grab().save(outputDir+"/outline.png");
 #ifdef Q_OS_WIN
         if(phase=="interrupt"){qInfo()<<"RUST_QA intentionally terminating isolated session";TerminateProcess(GetCurrentProcess(),86);}
 #endif
         return failed?1:0;
+    }
+    {
+        // These probes change only files generated inside the isolated QA root.
+        const auto first=outputDir+"/reentry-first.rs",second=outputDir+"/reentry-second.rs";
+        check("Reentry fixtures",put(first,"fn first() {}\n")&&put(second,"fn second() {}\n"));
+        QPointer<Editor> editor(openFile(first));
+        if(editor){
+            const auto connection=connect(editor,&QSynedit::QSynEdit::changed,this,[&,editor]{if(editor)mEditorManager->forceCloseEditor(editor);});
+            editor->setSelText("//closed from callback\n");disconnect(connection);
+            check("Close from changed detaches tab before return",!mEditorManager->getOpenedEditor(first));
+            check("Close from changed defers destruction",editor&&editor->removing());
+            QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);check("Deferred editor destroyed",!editor);
+        }else check("Close callback fixture opens",false);
+        const auto closedOnOpen=connect(mEditorManager,&EditorManager::editorOpenned,this,[&]{if(auto e=mEditorManager->getOpenedEditor(first))mEditorManager->forceCloseEditor(e);});
+        check("Open callback closes target safely",openFile(first)==nullptr);disconnect(closedOnOpen);QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+        QPointer<Editor> firstEditor(openFile(first));
+        const auto before=firstEditor?firstEditor->text():QString{};
+        const auto edit=[](const QString &replacement){return QJsonObject{{"range",QJsonObject{{"start",QJsonObject{{"line",0},{"character",3}}},{"end",QJsonObject{{"line",0},{"character",8}}}}},{"newText",replacement}};};
+        const QJsonObject proposed{{"changes",QJsonObject{{QUrl::fromLocalFile(first).toString(),QJsonArray{edit("other")}},
+            {QUrl::fromLocalFile(second).toString(),QJsonArray{QJsonObject{{"range",QJsonObject{{"start",QJsonObject{{"line",0},{"character",3}}},{"end",QJsonObject{{"line",0},{"character",9}}}}},{"newText","other2"}}}}}}};
+        if(firstEditor){
+            const auto changeEarlier=connect(mEditorManager,&EditorManager::editorOpenned,this,[&]{if(firstEditor&&mEditorManager->getOpenedEditor(second))firstEditor->setContent(before+"\n// callback");});
+            check("Workspace edit rejects earlier target changed on final open",!mRustNavigation->applyEdits(proposed,firstEditor,{{first,before}},false));disconnect(changeEarlier);
+            const auto actualCallbackText=firstEditor->text().replace("\r\n","\n").replace('\r','\n');const auto expectedCallbackText=(before+"\n// callback").replace("\r\n","\n").replace('\r','\n');
+            check("Rejected workspace edit preserves callback text",actualCallbackText==expectedCallbackText);
+            if(actualCallbackText!=expectedCallbackText)qWarning()<<"QA callback text actual/expected"<<actualCallbackText<<expectedCallbackText;
+            auto secondEditor=mEditorManager->getOpenedEditor(second);check("Rejected workspace edit leaves second target unchanged",secondEditor&&secondEditor->text().contains("fn second"));
+            firstEditor->setContent(before);firstEditor->setModified(false);
+            bool once=true;QTimer mutatePreview;mutatePreview.setInterval(20);connect(&mutatePreview,&QTimer::timeout,this,[&]{
+                for(auto w:QApplication::topLevelWidgets())if(w->objectName()=="rustWorkspaceEditPreview")if(auto d=qobject_cast<QDialog *>(w)){if(once){once=false;firstEditor->setContent(before+"// preview\n");}d->accept();}
+            });mutatePreview.start();check("Workspace edit rejects document changed in preview",!mRustNavigation->applyEdits(proposed,firstEditor,{},true));mutatePreview.stop();
+            check("Preview rejection leaves second target unchanged",secondEditor&&secondEditor->text().contains("fn second"));
+            if(secondEditor)mEditorManager->forceCloseEditor(secondEditor);if(firstEditor)mEditorManager->forceCloseEditor(firstEditor);
+        }else check("Workspace edit fixture opens",false);
     }
     QDir().mkpath(outputDir+"/cargo-project/src");const QString root=outputDir+"/cargo-project";
     check("manifest",put(root+"/Cargo.toml","[package]\nname=\"rust_ui_probe\"\nversion=\"0.1.0\"\nedition=\"2024\"\n"));
     const QString source=root+"/src/main.rs";
     check("source",put(source,"fn main(){println!(\"RUST_GUI_OK\");}\n"));
     mRustRoot=root;setFilesViewRoot(root);Editor *editor=openFile(source);
+    if(editor){mEditorManager->activeEditor(editor,true);updateEditorActions(editor);}
     check("Rust editor",editor && editor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust);
     check("Identity",windowTitle().contains("Red Panda Rust"));
     check("Icon",!windowIcon().isNull());
@@ -147,6 +224,10 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
         editor->setCaretXY({0,0});editor->setSelText(QString::fromUtf8("// salvataggio città € Rust\n"));
         check("Atomic source save",editor->save());
         QFile saved(source);check("Saved UTF-8 text",saved.open(QIODevice::ReadOnly)&&saved.readAll().contains(QString::fromUtf8("città € Rust").toUtf8()));saved.close();
+        const bool autoFormat=pSettings->editor().autoFormatWhenSaved();pSettings->editor().setAutoFormatWhenSaved(true);
+        editor->setContent("fn main(){let n=1;println!(\"RUST_GUI_OK {n}\");}");
+        check("Rust automatic format on save succeeds",editor->save());check("Rust automatic save uses rustfmt buffer",editor->text().contains("let n = 1;")&&editor->text().contains("RUST_GUI_OK"));
+        pSettings->editor().setAutoFormatWhenSaved(autoFormat);
         const QString oldFilename=editor->filename();
         editor->setCaretXY({0,0});editor->setSelText("// preserved after save failure\n");
         const QString modifiedText=editor->text();
@@ -177,10 +258,13 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
     QTimer::singleShot(0,this,[]{for(auto *w:QApplication::topLevelWidgets())if(auto *m=qobject_cast<QMessageBox *>(w))m->done(QMessageBox::No);});
     QApplication::processEvents();
     if(editor) mEditorManager->closeEditor(editor,true,true);
-    check("Invalid source",put(source,"fn main() { let _:u32 = \"invalid\"; }\n"));
+    check("Invalid source",put(source,QString::fromUtf8("fn main() { let crab=\"🦀\"; let _:u32 = \"invalid\"; }\n").toUtf8()));
     editor=openFile(source);
     check("Compiler error handled",run("check")&&result!=0);
     check("Original issues table",ui->tableIssues->count()>0);
+    if(editor){bool navigated=false;for(int row=0;row<ui->tableIssues->count();++row){const auto issue=ui->tableIssues->issue(row);if(issue&&issue->type==CompileIssueType::Error&&issue->filename==source){on_tableIssues_doubleClicked(ui->tableIssues->issuesModel()->index(row,0));navigated=editor->caretY()==0&&editor->caretX()==editor->lineText(0).indexOf("\"invalid\"");break;}}
+        check("Rust compiler diagnostic navigates exact UTF-16 position",navigated);
+    }
     check("GUI remained enabled",ui->actionCompile->isEnabled());
     if(editor)mEditorManager->closeEditor(editor,true,true);
     check("Corrected source",put(source,"fn main() { println!(\"RUST_GUI_RECOVERED\"); }\n"));
@@ -266,6 +350,16 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
                 semantic->redo();check("Semantic completion redo",semantic->text().contains("value = semantic_answer()"));
                 check("Save semantic completion",semantic->save());
                 check("Completed Rust code compiles",run("check")&&result==0);
+                const auto definitionReached=[&]{QElapsedTimer clock;clock.start();while(semantic->caretY()!=0&&clock.elapsed()<10000)QTest::qWait(30);return semantic->caretY()==0;};
+                const int callColumn=semantic->lineText(1).indexOf("semantic_answer")+2;
+                semantic->setCaretXY({callColumn,1});mEditorManager->activeEditor(semantic,true);updateEditorActions(semantic);
+                check("Rust definition menu enabled",ui->actionGoto_Definition->isEnabled());ui->actionGoto_Definition->trigger();check("Rust definition menu navigates",definitionReached());
+                semantic->setCaretXY({callColumn,1});ui->actionGoto_Declaration->trigger();check("Rust declaration menu navigates",definitionReached());
+                const auto click=semantic->displayCoordToPixels(semantic->bufferToDisplayPos({callColumn,1}))+QPoint(2,semantic->textHeight()/2);
+                QTest::mouseClick(semantic->viewport(),Qt::LeftButton,Qt::ControlModifier,click);check("Rust Ctrl click navigates",definitionReached());
+                const bool enabled=pSettings->codeCompletion().enabled();const auto stableText=semantic->text();pSettings->codeCompletion().setEnabled(false);
+                QKeyEvent disabledRequest(QEvent::KeyPress,Qt::Key_Space,Qt::ControlModifier);QApplication::sendEvent(semantic,&disabledRequest);
+                check("Rust completion enable preference takes effect",popup&&!popup->isVisible()&&semantic->text()==stableText);pSettings->codeCompletion().setEnabled(enabled);
             }
             mEditorManager->closeEditor(semantic,true,true);
         }else check("Semantic editor",false);
@@ -293,7 +387,7 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
         const auto waitFor=[](const std::function<bool()> &predicate,int timeout){QElapsedTimer elapsed;elapsed.start();while(!predicate()&&elapsed.elapsed()<timeout){QEventLoop loop;QTimer::singleShot(30,&loop,&QEventLoop::quit);loop.exec();}return predicate();};
         if(mainEditor&&helperEditor){
             QApplication::setActiveWindow(this);helperEditor->setFocus();helperEditor->setCaretXY({9,0});
-            auto outline=findChild<QTreeWidget *>("rustOutline");check("Rust outline populated",waitFor([&]{return outline&&outline->topLevelItemCount()>0;},30000));
+            auto outline=findChild<QTreeView *>("rustOutline");check("Rust outline populated",waitFor([&]{return outline&&outline->model()->rowCount()>0;},30000));
             QJsonArray locations;const auto refs=connect(mRustNavigation,&RustNavigation::referencesReady,this,[&](const QJsonArray &value){locations=value;});
             mRustNavigation->references();check("GUI Rust references",waitFor([&]{return locations.size()>=3;},15000));disconnect(refs);
             for(auto widget:QApplication::topLevelWidgets())if(widget->objectName()=="rustReferences")widget->close();
@@ -418,7 +512,15 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             debugEditor->setCaretXY({0,0});debugEditor->setSelText("// modified during debug\n");
             ui->actionRun_To_Cursor->trigger();QApplication::processEvents();
             check("Run to cursor rejects changed source",mRustDebugger->state()==RustDebugSession::State::Stopped&&statusBar()->currentMessage().contains("testo"));
-            debugEditor->undo();ui->actionStop_Execution->trigger();
+            debugEditor->undo();
+            const bool lateVariables=waitFor([&]{return variables&&!variables->findItems("total",Qt::MatchExactly|Qt::MatchRecursive,0).isEmpty();},10000);
+            auto lateTotal=lateVariables?variables->findItems("total",Qt::MatchExactly|Qt::MatchRecursive,0).value(0):nullptr;
+            bool interruptedDialog=false;QTimer stopDuringEdit;stopDuringEdit.setInterval(20);
+            connect(&stopDuringEdit,&QTimer::timeout,this,[&]{for(auto widget:QApplication::topLevelWidgets())if(auto dialog=qobject_cast<QInputDialog *>(widget)){
+                if(!interruptedDialog){interruptedDialog=true;mRustDebugger->stop();}dialog->setTextValue("999");dialog->accept();
+            }});stopDuringEdit.start();if(lateTotal)variables->itemDoubleClicked(lateTotal,1);stopDuringEdit.stop();
+            check("Stop during variable dialog invalidates deleted tree node safely",interruptedDialog&&mRustDebugger->state()!=RustDebugSession::State::Stopped);
+            ui->actionStop_Execution->trigger();
             check("Debug stop action returns to idle",waitFor([this]{return mRustDebugger->state()==RustDebugSession::State::Idle;},10000));
             debugEditor->setModified(false);
             mEditorManager->closeEditor(debugEditor,true,true);
@@ -426,6 +528,16 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
     }
     {
         auto sourceEditor=openFile(source);if(sourceEditor)mEditorManager->activeEditor(sourceEditor,true);mRustRoot=root;
+        const auto protectedArtifact=root+"/target/debug/opened-artifact.txt";check("Live protection artifact fixture",put(protectedArtifact,"artifact kept when opened"));
+        {
+            RustCleanDialog preview(root,{source},this);bool nowOpened=false;preview.setProtectedFilesProvider([&]{return nowOpened?QStringList{protectedArtifact}:QStringList{};});
+            preview.show();QElapsedTimer clock;clock.start();auto move=preview.findChild<QPushButton *>("rustRecycleArtifacts");
+            while(move&&!move->isEnabled()&&clock.elapsed()<20000)QTest::qWait(30);
+            check("Live protection preview prepared",move&&move->isEnabled());if(move&&move->isEnabled()){nowOpened=true;move->click();clock.restart();
+                while(!move->isEnabled()&&clock.elapsed()<10000)QTest::qWait(30);
+                const auto status=preview.findChild<QLabel *>("rustCleanStatus");check("Document opened after clean preview is protected",move->isEnabled()&&status&&status->text().contains("documento aperto")&&QFileInfo::exists(protectedArtifact)&&QFileInfo::exists(root+"/target/.rustc_info.json"));
+            }preview.reject();
+        }
         auto action=findChild<QAction *>("rust-command-clean");bool previewSeen=false;QTimer closer,deadline;closer.setInterval(30);deadline.setSingleShot(true);
         const auto closePreview=[&](bool recycle){for(auto widget:QApplication::topLevelWidgets())if(auto dialog=qobject_cast<RustCleanDialog *>(widget)){
             auto button=dialog->findChild<QPushButton *>("rustRecycleArtifacts");if(button&&button->isEnabled()){
@@ -493,6 +605,10 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
     }
     {
         auto options=SettingsDialog::optionDialog(colorManager(),iconsManager(),this);
+        const auto editorGroup=QCoreApplication::translate("SettingsDialog","Editor"),completionPage=QCoreApplication::translate("SettingsDialog","Code Completion"),tipsPage=QCoreApplication::translate("SettingsDialog","Tooltips");
+        check("Rust completion preferences restored",options->setCurrentWidget(completionPage,editorGroup));
+        auto parserShare=options->findChild<QCheckBox *>("chkEditorShareCodeParser");check("Rust completion page has no C++ parser option",parserShare&&parserShare->isHidden());
+        check("Rust tooltip preferences restored",options->setCurrentWidget(tipsPage,editorGroup));
         check("Rust tools page",options->setCurrentWidget(tr("Strumenti del compilatore"),tr("Rust")));
         options->resize(1000,760);options->show();QApplication::processEvents();
         auto path=options->findChild<QLineEdit *>("rustTool_rustc");

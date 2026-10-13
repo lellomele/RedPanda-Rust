@@ -126,6 +126,28 @@ private slots:
         RustLspClient client;QSignalSpy status(&client,&RustLspClient::status);
         QCOMPARE(client.updateDocument(mFile,QString(4*1024*1024+1,'x')),0);QCOMPARE(client.version(mFile),0);QVERIFY(!status.isEmpty());
     }
+    void closeFromDiagnosticCallback(){
+        RustLspClient client;client.setSuspended(true);QVERIFY(client.updateDocument(mFile,"fn a() {}")>0);
+        int calls=0;connect(&client,&RustLspClient::diagnostics,this,[&](const QString &file,int,const QJsonArray &){++calls;client.closeDocument(file);});
+        QString secondReceiver;connect(&client,&RustLspClient::diagnostics,this,[&](const QString &file,int,const QJsonArray &){secondReceiver=file;});
+        QCOMPARE(client.updateDocument(mFile,"fn b() {}"),0);QCOMPARE(calls,1);QCOMPARE(secondReceiver,QFileInfo(mFile).absoluteFilePath());QCOMPARE(client.version(mFile),0);
+    }
+    void resetCallbacksCanChangeDocumentSet(){
+        RustLspClient client;client.setSuspended(true);const auto second=mTemp.filePath("second.rs");
+        QVERIFY(client.updateDocument(mFile,"fn a() {}")>0);QVERIFY(client.updateDocument(second,"fn b() {}")>0);
+        bool once=true;connect(&client,&RustLspClient::diagnostics,this,[&](const QString &file,int,const QJsonArray &){
+            client.closeDocument(file);if(once){once=false;client.restart();}
+        });
+        client.restart();QCOMPARE(client.version(mFile),0);QCOMPARE(client.version(second),0);
+        QVERIFY(client.updateDocument(mFile,"fn recovered() {}")>0);QVERIFY(client.version(mFile)>0);
+    }
+    void restartFromStatusDuringStartup(){
+        RustLspClient client;bool once=true;connect(&client,&RustLspClient::status,this,[&](const QString &status){
+            if(once&&status.contains("avvio")){once=false;client.closeDocument(mFile);client.restart();}
+        });
+        QCOMPARE(client.updateDocument(mFile,"fn main() {}"),0);QCOMPARE(client.version(mFile),0);QTest::qWait(400);QVERIFY(!client.ready());
+        QVERIFY(client.updateDocument(mFile,"fn main() {}")>0);QTRY_VERIFY_WITH_TIMEOUT(client.ready(),15000);
+    }
     void realRustAnalyzer(){
         qunsetenv("REDPANDA_FAKE_LSP");QString error;QVERIFY(RustTools::save({},"2024",error));
         RustLspClient client;QSignalSpy result(&client,&RustLspClient::result);

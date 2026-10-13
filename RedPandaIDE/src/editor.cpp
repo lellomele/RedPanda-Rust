@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "editor.h"
+#include <QPointer>
 #include <QSaveFile>
 #include "snippetsstorage.h"
 
@@ -193,9 +194,16 @@ Editor::Editor(QWidget *parent):
 Editor::~Editor() {
     // QObject::destroyed is emitted after derived members have already gone.
     // Detach services while syntaxer/document/widget state is still valid.
-    emit aboutToDestroy(this);
+    prepareForRemoval();
     //qDebug()<<"editor "<<mFilename<<" deleted";
     cleanAutoBackup();
+}
+
+void Editor::prepareForRemoval() {
+    if(mRemoving)return;
+    mRemoving=true;
+    mAutoBackupTimer.stop();mTooltipTimer.stop();mFunctionTipTimer.stop();
+    emit aboutToDestroy(this);
 }
 
 void Editor::loadFile(QString filename, bool parse) {
@@ -287,12 +295,15 @@ void Editor::convertToEncoding(const QByteArray &encoding)
 }
 
 bool Editor::save(bool force, bool doReparse) {
+    if(mSaving||mRemoving)return false;
     if (this->mIsNew && !force) {
         return saveAs("", doReparse);
-    }    
+    }
+    const QPointer<Editor> self(this);mSaving=true;const auto saveGuard=finally([self]{if(self)self->mSaving=false;});
     try {
         if (mEditorSettings->autoFormatWhenSaved()) {
-            reformat(false);
+            const auto before=text(),file=mFilename;const bool formatted=reformat(false);
+            if(!self||removing()||mFilename!=file||(!formatted&&text()!=before))return false;
         } else if (mEditorSettings->removeTrailingSpacesWhenSaved()) {
             trimTrailingSpaces();
         }
@@ -302,9 +313,12 @@ bool Editor::save(bool force, bool doReparse) {
         if (mFileSystemWatcher)
             mFileSystemWatcher->removePath(mFilename);
         emit fileSaving(this, mFilename);
+        if(!self||removing())return false;
         saveFile(mFilename);
+        if(!self||removing())return false;
         mIsNew = false;
         emit fileSaved(this, mFilename);
+        if(!self||removing())return false;
         if (mFileSystemWatcher)
             mFileSystemWatcher->addPath(mFilename);
         setModified(false);
@@ -314,6 +328,7 @@ bool Editor::save(bool force, bool doReparse) {
         if (mFileSystemWatcher)
             mFileSystemWatcher->addPath(mFilename);
         QMessageBox::critical(parentWidget(),tr("Save Error"), exception.reason());
+        if(!self||removing())return false;
         emit fileSaveError(this, mFilename, exception.reason());
         return false;
     }
@@ -329,6 +344,7 @@ bool Editor::save(bool force, bool doReparse) {
 }
 
 bool Editor::saveAs(const QString &name, bool doCheckSyntax){
+    if(mSaving||mRemoving)return false;const QPointer<Editor> self(this);mSaving=true;const auto saveGuard=finally([self]{if(self)self->mSaving=false;});
     QString newName = name;
     QString oldName = mFilename;
     if (name.isEmpty()) {
@@ -336,7 +352,8 @@ bool Editor::saveAs(const QString &name, bool doCheckSyntax){
         QString defaultExt;
         defaultExt=QFileInfo(oldName).suffix();
         if (defaultExt.isEmpty()) {
-            if (mEditorSettings->defaultFileCpp()) {
+            if(mFileType==FileType::RustSource){selectedFileFilter=pSystemConsts->fileFilterFor("rs");defaultExt="rs";}
+            else if (mEditorSettings->defaultFileCpp()) {
                 selectedFileFilter = pSystemConsts->defaultCPPFileFilter();
                 defaultExt = "cpp";
             } else {
@@ -346,22 +363,21 @@ bool Editor::saveAs(const QString &name, bool doCheckSyntax){
         } else {
             selectedFileFilter = pSystemConsts->fileFilterFor(defaultExt);
         }
-        QFileDialog dialog(this,tr("Save As"),extractFilePath(mFilename),
+        auto dialog=new QFileDialog(this,tr("Save As"),extractFilePath(mFilename),
                            pSystemConsts->defaultFileFilters().join(";;"));
-        dialog.selectNameFilter(selectedFileFilter);
-        //dialog.setDefaultSuffix(defaultExt);
-        dialog.selectFile(mFilename);
-        dialog.setFileMode(QFileDialog::AnyFile);
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        const QPointer<QFileDialog> guard(dialog);dialog->selectNameFilter(selectedFileFilter);
+        //dialog->setDefaultSuffix(defaultExt);
+        dialog->selectFile(mFilename);
+        dialog->setFileMode(QFileDialog::AnyFile);
+        dialog->setAcceptMode(QFileDialog::AcceptSave);
 
-        if (dialog.exec()!=QFileDialog::Accepted) {
-            return false;
-        }
-        QStringList selectedFiles=dialog.selectedFiles();
-        newName = selectedFiles.first();
+        const auto result=dialog->exec();
+        if(!self||!guard||removing()||result!=QFileDialog::Accepted){if(guard)guard->deleteLater();return false;}
+        const auto selectedFiles=guard->selectedFiles();const auto selectedFilter=guard->selectedNameFilter();guard->deleteLater();
+        if(selectedFiles.isEmpty())return false;newName=selectedFiles.first();
         QFileInfo fileInfo(newName);
         if (fileInfo.suffix().isEmpty()) {
-            QString filter = dialog.selectedNameFilter();
+            QString filter = selectedFilter;
             if (!filter.contains("*.*")) {
                 int pos = filter.indexOf("*.");
                 if (pos>=0) {
@@ -390,14 +406,17 @@ bool Editor::saveAs(const QString &name, bool doCheckSyntax){
     const QByteArray previousFileEncoding = mFileEncoding;
     try {
         if (mEditorSettings->autoFormatWhenSaved()) {
-            reformat(false);
+            const auto before=text(),file=mFilename;const bool formatted=reformat(false);
+            if(!self||removing()||mFilename!=file||(!formatted&&text()!=before))return false;
         } else if (mEditorSettings->removeTrailingSpacesWhenSaved()) {
             trimTrailingSpaces();
         }
         emit fileSaving(this, newName);
+        if(!self||removing())return false;
         saveFile(newName, false);
     } catch (FileError& exception) {
         QMessageBox::critical(parentWidget(), tr("Save Error"), exception.reason());
+        if(!self||removing())return false;
         emit fileSaveError(this, newName, exception.reason());
         return false;
     }
@@ -422,8 +441,11 @@ bool Editor::saveAs(const QString &name, bool doCheckSyntax){
     setStatusChanged(QSynedit::StatusChange::Custom0);
     if (previousFileEncoding != mFileEncoding)
         emit fileEncodingChanged(this);
+    if(!self||removing())return false;
     emit fileSaveAsed(this, oldName, newName);
+    if(!self||removing())return false;
     emit fileSaved(this, newName);
+    if(!self||removing())return false;
     setCppParser();
     reparse();
     if (doCheckSyntax && mEditorSettings->syntaxCheckWhenSave())
@@ -4772,6 +4794,7 @@ void Editor::setInProject(bool newInProject, bool parse)
 
 void Editor::gotoDeclaration(const CharPos &pos)
 {
+    if(mFileType==FileType::RustSource){emit rustDefinitionRequested(pos);return;}
     if (!parser())
         return;
     // Exit early, don't bother creating a stream (which is slow)
@@ -4801,6 +4824,7 @@ void Editor::gotoDeclaration(const CharPos &pos)
 
 void Editor::gotoDefinition(const CharPos &pos)
 {
+    if(mFileType==FileType::RustSource){emit rustDefinitionRequested(pos);return;}
     if (!parser())
         return;
     QStringList expression = getExpressionAtPosition(pos);
@@ -5206,37 +5230,40 @@ QString Editor::getPreviousWordAtPositionForCompleteFunctionDefinition(const Cha
     return result;
 }
 
-void Editor::reformat(bool doReparse)
+bool Editor::reformat(bool doReparse)
 {
     if (readOnly())
-        return;
+        return false;
     if (!mGetReformatterFunc)
-        return;
+        return false;
     std::unique_ptr<BaseReformatter> formatter = mGetReformatterFunc(this);
     if (!formatter)
-        return;
+        return false;
+    const QPointer<Editor> self(this);const auto previousFile=mFilename;
     QString errorMessage;
     bool isOk;
     QString newContent = formatter->refomat(text(),errorMessage,isOk);
+    if(!self||removing()||mFilename!=previousFile)return false;
     if (!isOk) {
         if (!errorMessage.isEmpty()) {
-            QMessageBox::critical(this,
+            QMessageBox::critical(parentWidget(),
                                   tr("Reformat Error"),
                                   errorMessage);
         }
-        return;
+        return false;
     }
     if (newContent.isEmpty())
-        return;
+        return false;
     QSet<int> breakpointsBackup = mBreakpointLines;
     QSet<int> bookmarksBackup = mBookmarkLines;
-    replaceContent(newContent, doReparse);
+    replaceContent(newContent, doReparse);if(!self||removing())return false;
     foreach(int line, breakpointsBackup) {
-        toggleBreakpoint(line);
+        toggleBreakpoint(line);if(!self||removing())return false;
     }
     foreach(int line, bookmarksBackup) {
-        toggleBookmark(line);
+        toggleBookmark(line);if(!self||removing())return false;
     }
+    return true;
 }
 
 void Editor::replaceContent(const QString &newContent, bool doReparse)

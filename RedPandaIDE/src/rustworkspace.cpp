@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Raffaele Mele
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "rustworkspace.h"
+#include "rustcoordinates.h"
+#include <QPointer>
+#include <QScopeGuard>
 #include "rusttools.h"
 #include <QDir>
 #include <QFileInfo>
@@ -19,29 +22,40 @@ RustWorkspace::RustWorkspace(QObject *parent):QObject(parent){
     connect(&mProcess,&QProcess::started,this,[this]{mStartTimer.stop();emit busyChanged(true);});
     connect(&mProcess,&QProcess::readyReadStandardOutput,this,&RustWorkspace::drain);
     connect(&mProcess,&QProcess::errorOccurred,this,[this](QProcess::ProcessError error){
-        emit output(tr("Errore del processo: %1\n").arg(mProcess.errorString()));
-        if(error==QProcess::FailedToStart){mStartTimer.stop();releaseJob();emit busyChanged(false);emit finished(-1,mCancelled);}
+        const QPointer<RustWorkspace> self(this);const auto generation=mGeneration;
+        if(error==QProcess::FailedToStart){mCompleting=true;mStartTimer.stop();releaseJob();}
+        const auto cleanup=qScopeGuard([self,error]{if(self&&error==QProcess::FailedToStart)self->mCompleting=false;});
+        emit output(tr("Errore del processo: %1\n").arg(mProcess.errorString()));if(!self||generation!=mGeneration)return;
+        if(error==QProcess::FailedToStart){const bool cancelled=mCancelled;emit busyChanged(false);if(self&&generation==mGeneration)emit finished(-1,cancelled);}
+        else if(error==QProcess::ReadError||error==QProcess::WriteError)stop();
     });
     connect(&mProcess,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus status){
-        mStartTimer.stop();mFinishTimer.stop();drain();
-        if(!mPending.isEmpty()){handleLine(mPending);mPending.clear();}
+        const QPointer<RustWorkspace> self(this);const auto generation=mGeneration;mCompleting=true;
+        const auto cleanup=qScopeGuard([self]{if(self)self->mCompleting=false;});
+        mStartTimer.stop();mFinishTimer.stop();drain();if(!self||generation!=mGeneration)return;
+        if(!mPending.isEmpty()){const auto pending=mPending;mPending.clear();handleLine(pending);if(!self||generation!=mGeneration)return;}
         releaseJob();
         if(code!=0||status!=QProcess::NormalExit||mCancelled)mArtifacts.clear();
         if(code==0&&status==QProcess::NormalExit&&!mCancelled&&!mExecuting&&mCommand=="run"&&mRunAfterBuild.isEmpty()){
             if(mArtifacts.size()==1)mRunAfterBuild=mArtifacts.first();
-            else{emit output(tr("Selezionare un solo target eseguibile nelle opzioni Rust.\n"));emit busyChanged(false);emit finished(-1,false);return;}
+            else{emit output(tr("Selezionare un solo target eseguibile nelle opzioni Rust.\n"));if(!self)return;emit busyChanged(false);if(self)emit finished(-1,false);return;}
         }
         if(code==0 && status==QProcess::NormalExit && !mCancelled && !mRunAfterBuild.isEmpty()){
             const QString executable=mRunAfterBuild;mRunAfterBuild.clear();mDirectDiagnostics=false;
-            mExecuting=true;if(launch(executable,mOptions.arguments,false))return;
-            emit busyChanged(false);emit finished(-1,false);return;
+            mExecuting=true;if(launch(executable,mOptions.arguments,false)||!self)return;
+            emit busyChanged(false);if(self)emit finished(-1,mCancelled);return;
         }
         mRunAfterBuild.clear();
         emit output(tr("\nProcesso terminato: %1%2\n").arg(code).arg(mCancelled?tr(" (annullato)"):(status==QProcess::CrashExit?tr(" (arresto anomalo)"):QString())));
-        emit busyChanged(false);emit finished(status==QProcess::CrashExit?-1:code,mCancelled);
+        if(!self||generation!=mGeneration)return;const bool cancelled=mCancelled;
+        emit busyChanged(false);if(self&&generation==mGeneration)emit finished(status==QProcess::CrashExit?-1:code,cancelled);
     });
 }
-RustWorkspace::~RustWorkspace(){stop();if(busy())mProcess.waitForFinished(2000);releaseJob();}
+RustWorkspace::~RustWorkspace(){disconnect(&mProcess,nullptr,this,nullptr);disconnect(this,nullptr,nullptr,nullptr);mStartTimer.stop();mFinishTimer.stop();
+#ifdef Q_OS_WIN
+    if(mJob)TerminateJobObject(mJob,1);
+#endif
+    mProcess.kill();mProcess.waitForFinished(700);releaseJob();}
 QString RustWorkspace::findTool(const QString &name){
     return RustTools::effectivePath(name);
 }
@@ -77,7 +91,9 @@ void RustWorkspace::releaseJob(){
 #endif
 }
 bool RustWorkspace::start(const QString &root,const QString &command,const QStringList &extra){
-    if(busy())return false;
+    if(busy()||mPreparing||mCompleting)return false;
+    const QPointer<RustWorkspace> self(this);mPreparing=true;++mGeneration;
+    const auto cleanup=qScopeGuard([self]{if(self)self->mPreparing=false;});
     const QSet<QString> allowed={"build","check","run","test","clippy","fmt","new","doc","bench","clean","fetch","asm","llvm","debug-test","debug-build"};
     if(!allowed.contains(command)){emit output(tr("Comando Cargo non valido.\n"));return false;}
     const QString cargo=findTool("cargo");
@@ -86,7 +102,7 @@ bool RustWorkspace::start(const QString &root,const QString &command,const QStri
     if(!QFileInfo(mRoot).isDir()||(command!="new"&&!QFileInfo(QDir(mRoot).filePath("Cargo.toml")).isFile())){
         emit output(tr("Aprire un progetto contenente Cargo.toml.\n"));return false;
     }
-    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty())emit output(error+'\n');
+    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty()){emit output(error+'\n');if(!self)return false;}
     if(command!="new"&&!mOptions.validate(mRoot,error)){emit output(error+'\n');return false;}
     mExecuting=false;mRunAfterBuild.clear();mDirectDiagnostics=false;
     mArtifacts.clear();
@@ -116,11 +132,20 @@ bool RustWorkspace::launch(const QString &program,const QStringList &args,bool d
     if(mCommand=="debug-build"||mCommand=="debug-test"){environment.insert("CARGO_PROFILE_RELEASE_DEBUG","2");environment.insert("CARGO_PROFILE_DEV_DEBUG","2");}
     const auto rustc=findTool("rustc");if(!rustc.isEmpty())environment.insert("RUSTC",rustc);
     mProcess.setProcessEnvironment(environment);mProcess.setWorkingDirectory(mExecuting?mOptions.runDirectory(mRoot):mRoot);
+    const QPointer<RustWorkspace> self(this);const auto generation=mGeneration;
     emit output(QFileInfo(program).fileName()+" "+args.join(' ')+"\n");
-    mProcess.start(program,args);mStartTimer.start();emit busyChanged(true);return true;
+    if(!self||generation!=mGeneration)return false;
+    if(mCancelled){releaseJob();return false;}
+    mProcess.start(program,args);if(!self||generation!=mGeneration)return false;
+    // QProcess may report FailedToStart synchronously. The accepted operation
+    // has already emitted finished(-1); do not arm its startup watchdog.
+    if(mProcess.state()==QProcess::NotRunning)return true;
+    mStartTimer.start();emit busyChanged(true);return self&&generation==mGeneration;
 }
 bool RustWorkspace::startFile(const QString &file,const QString &command){
-    if(busy())return false;
+    if(busy()||mPreparing||mCompleting)return false;
+    const QPointer<RustWorkspace> self(this);mPreparing=true;++mGeneration;
+    const auto cleanup=qScopeGuard([self]{if(self)self->mPreparing=false;});
     const QFileInfo source(file);
     if(!source.isFile()||source.suffix().compare("rs",Qt::CaseInsensitive)!=0){emit output(tr("Salvare prima il file Rust (.rs).\n"));return false;}
     if(command=="clippy"){emit output(tr("Clippy richiede un progetto Cargo; per un file singolo usare Controlla.\n"));return false;}
@@ -129,7 +154,7 @@ bool RustWorkspace::startFile(const QString &file,const QString &command){
     const QString tool=findTool(command=="fmt"?"rustfmt":"rustc");
     if(tool.isEmpty()){emit output(tr("Strumento Rust non trovato: %1.\n").arg(command=="fmt"?"rustfmt":"rustc"));return false;}
     mRoot=source.absolutePath();mCommand=command;mRunAfterBuild.clear();mDirectDiagnostics=command!="fmt";
-    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty())emit output(error+'\n');
+    QString error;mOptions=RustProjectOptions::load(mRoot,&error);if(!error.isEmpty()){emit output(error+'\n');if(!self)return false;}
     if(!mOptions.validate(mRoot,error)){emit output(error+'\n');return false;}mExecuting=false;
     mArtifacts.clear();
     if(command=="fmt")return launch(tool,{"--edition",RustTools::edition(),source.absoluteFilePath()},false);
@@ -152,10 +177,10 @@ bool RustWorkspace::startFile(const QString &file,const QString &command){
     return launch(tool,args,true);
 }
 void RustWorkspace::stop(){
-    if(!busy())return;mCancelled=true;
+    if(!busy()&&!mPreparing&&!mCompleting)return;mCancelled=true;
 #ifdef Q_OS_WIN
     if(!mJob || !TerminateJobObject(mJob,1)){
-        emit output(tr("Interruzione diretta del processo.\n"));mProcess.kill();
+        const QPointer<RustWorkspace> self(this);emit output(tr("Interruzione diretta del processo.\n"));if(self)mProcess.kill();
     }
 #else
     mProcess.terminate();mFinishTimer.start();
@@ -169,19 +194,21 @@ void RustWorkspace::sendInput(const QString &text){
 }
 void RustWorkspace::closeInput(){if(busy())mProcess.closeWriteChannel();}
 void RustWorkspace::drain(){
+    const QPointer<RustWorkspace> self(this);const auto generation=mGeneration;
     const QByteArray bytes=mProcess.readAllStandardOutput();mBytes+=bytes.size();
-    if(mBytes>16*1024*1024){mPending.clear();emit output(tr("Output superiore a 16 MiB; operazione annullata.\n"));stop();return;}
+    if(mBytes>16*1024*1024){mPending.clear();emit output(tr("Output superiore a 16 MiB; operazione annullata.\n"));if(self)stop();return;}
     if(!mBuilding){emit output(mDecoder(bytes));return;}
     mPending+=bytes;
     int offset=0,index;
     while((index=mPending.indexOf('\n',offset))>=0){
-        handleLine(mPending.mid(offset,index-offset));offset=index+1;
-        if(!mBuilding){emit output(mDecoder(mPending.mid(offset)));mPending.clear();return;}
+        handleLine(mPending.mid(offset,index-offset));if(!self||generation!=mGeneration)return;offset=index+1;
+        if(!mBuilding){const auto tail=mPending.mid(offset);mPending.clear();emit output(mDecoder(tail));return;}
     }
     mPending.remove(0,offset);
-    if(mPending.size()>1024*1024){emit output(tr("Riga di output superiore a 1 MiB; operazione annullata.\n"));mPending.clear();stop();}
+    if(mPending.size()>1024*1024){mPending.clear();emit output(tr("Riga di output superiore a 1 MiB; operazione annullata.\n"));if(self)stop();}
 }
 void RustWorkspace::handleLine(const QByteArray &line){
+    const QPointer<RustWorkspace> self(this);const auto generation=mGeneration;
     QJsonParseError error;const auto json=QJsonDocument::fromJson(line,&error);
     if(mBuilding&&error.error==QJsonParseError::NoError&&json.isObject()){
         const auto record=json.object();const auto reason=record.value("reason").toString();
@@ -195,15 +222,19 @@ void RustWorkspace::handleLine(const QByteArray &line){
         if(reason=="compiler-message" || (mDirectDiagnostics && record.value("$message_type").toString()=="diagnostic")){
             const auto message=mDirectDiagnostics?record:record.value("message").toObject();
             emit output(message.value("rendered").toString(message.value("message").toString())+'\n');
-            if(mIssues++>=10000)return;
-            for(const auto &value:message.value("spans").toArray()){
+            if(!self||generation!=mGeneration||mCancelled||mIssues>=10000)return;
+            int visited=0;for(const auto &value:message.value("spans").toArray()){
+                if(++visited>10000)break;
                 const auto span=value.toObject();if(!span.value("is_primary").toBool())continue;
                 auto item=std::make_shared<CompileIssue>();
                 item->filename=QDir::cleanPath(QDir::fromNativeSeparators(QDir(mRoot).absoluteFilePath(span.value("file_name").toString())));
-                item->line=span.value("line_start").toInt();item->column=span.value("column_start").toInt();item->endColumn=span.value("column_end").toInt();
+                const int line=span.value("line_start").toInt();if(line<1)continue;
+                const auto sourceLines=span.value("text").toArray();const auto source=sourceLines.isEmpty()?QString{}:sourceLines.first().toObject().value("text").toString();
+                item->line=line-1;item->column=RustCoordinates::scalarColumnToUtf16(source,span.value("column_start").toInt());
+                item->endColumn=span.value("line_end").toInt()==line?RustCoordinates::scalarColumnToUtf16(source,span.value("column_end").toInt()):int(source.size());
                 item->description=message.value("message").toString();item->originalDescription=item->description;
                 item->type=message.value("level").toString()=="error"?CompileIssueType::Error:CompileIssueType::Warning;
-                if(item->line>0&&!item->filename.isEmpty())emit issue(item);
+                if(!item->filename.isEmpty()){++mIssues;emit issue(item);}if(!self||generation!=mGeneration||mCancelled||mIssues>=10000)return;
             }return;
         }
     }

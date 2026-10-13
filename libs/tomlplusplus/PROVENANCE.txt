@@ -1,0 +1,7 @@
+toml++ 3.4.0
+Upstream: https://github.com/marzer/tomlplusplus
+Tag: v3.4.0
+Commit: 30172438cee64926dc41fdd9c11fb3ba5b2ba9de
+License: MIT (LICENSE)
+Single-header SHA256: 6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e
+Used to read Cargo manifest editions. No networking or writing from the parser.

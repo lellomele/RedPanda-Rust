@@ -48,7 +48,8 @@ private:
     QString mRunAfterBuild;
     QStringList mArtifacts;
     RustProjectOptions mOptions;
-    bool mExecuting=false;
+    bool mExecuting=false,mPreparing=false,mCompleting=false;
+    quint64 mGeneration=0;
     std::unique_ptr<QTemporaryDir> mFileBuild;
     bool mDirectDiagnostics=false;
     qint64 mBytes=0;

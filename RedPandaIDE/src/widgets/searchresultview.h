@@ -19,6 +19,7 @@
 
 #include <QTreeView>
 #include <QMap>
+#include <QHash>
 #include <QStyledItemDelegate>
 #include "qsynedit/searcher/baseseacher.h"
 #include "../utils.h"
@@ -36,13 +37,13 @@ enum class SearchType {
 
 struct SearchResultTreeItem {
     QString filename;
-    int line;
-    int start;
-    int len;
+    int line=0;
+    int start=0;
+    int len=0;
     QString text;
-    SearchResultTreeItem* parent;
+    SearchResultTreeItem* parent=nullptr;
     SearchResultTreeItemList results;
-    bool selected;
+    bool selected=false;
 };
 
 
@@ -113,6 +114,7 @@ public:
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     SearchResultModel *searchResultModel() const;
+    PSearchResultTreeItem itemForIndex(const QModelIndex &index) const;
     bool getItemFileAndLineChar(
             const QModelIndex&index,
             QString& filename,
@@ -125,6 +127,12 @@ private:
     SearchResultModel *mSearchResultModel;
     bool mSelectable;
 private:
+    void beginResetModel();
+    struct IndexedItem {PSearchResultTreeItem item;quintptr parent=0;int row=0;};
+    quintptr token(const PSearchResultTreeItem &item,int row,quintptr parent) const;
+    mutable QHash<quintptr,IndexedItem> mIndexedItems;
+    mutable QHash<const SearchResultTreeItem *,quintptr> mItemTokens;
+    mutable quintptr mNextToken=1;
     void resetModel();
     void beginAddItem();
     void endAddItem();
@@ -167,6 +175,7 @@ private:
     int mCurrentIndex;
     SearchResultTreeModel *mTreeModel;
     bool mUpdating = false;
+    friend class SearchResultTreeModel;
 };
 
 

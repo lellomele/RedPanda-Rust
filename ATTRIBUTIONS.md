@@ -11,5 +11,6 @@ Red Panda Rust deriva dal fork [lellomele/RedPanda-CPP](https://github.com/lello
 | CodeLLDB, eseguito come debugger esterno installato separatamente | Vadim Chugunov e contributori; [CodeLLDB](https://github.com/vadimcn/codelldb) è pubblicato con licenza MIT. La distribuzione della IDE non contiene CodeLLDB, LLDB, Python né le loro DLL. Licenze e provenienza raccolte durante la verifica sono conservate in `docs/licenses/debugger` |
 | Logo Rust derivato dal panda originale e risorse grafiche ereditate | Attribuzioni originali conservate; adattamento Rust di Raffaele Mele |
 | Qt, librerie, font, traduzioni e icone di terze parti | Rispettivi autori e licenze, documentati in `Contributors.md`, negli avvisi dei componenti e nella cartella `licenses` dei pacchetti |
+| Lettura dei manifest Cargo per l'edizione della formattazione | [toml++ 3.4.0](https://github.com/marzer/tomlplusplus/tree/v3.4.0), Mark Gillard e contributori, MIT; sorgenti e licenza in `libs/tomlplusplus` |
 
 Le attribuzioni alle modifiche non trasferiscono il copyright delle parti originali. Il programma mantiene la licenza GPL versione 3 o successiva; vedere `LICENSE`. Gli avvisi dei file ereditati e `FORK_NOTICE.txt` sono conservati.

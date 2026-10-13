@@ -145,7 +145,7 @@ void SettingsDialog::addPage(const QString &name, const QString &group, std::fun
 {
     if(QCoreApplication::applicationName()=="RedPandaRust"){
         if(group!=tr("Environment")&&group!=tr("Editor")&&group!=tr("Tools")&&group!=tr("Rust"))return;
-        if(name==tr("Code Completion")||name==tr("Auto Syntax Checking")||name==tr("Tooltips")||name==tr("File Association"))return;
+        if(name==tr("Auto Syntax Checking")||name==tr("File Association"))return;
     }
     QStandardItem *groupItem = nullptr;
     for (int i = 0; i < model.rowCount(); ++i)

@@ -43,7 +43,7 @@ struct CodeSnippet {
     QString prefix; //Prefix used in code suggestion
     QString code;  //Code body
     QString desc;  //Description
-    int section;  //Section in the menu
+    int section=0;  //Section in the menu
     QString language = "all";
     bool enabled = true;
 };

@@ -63,7 +63,7 @@ QWidget *FilenameEditDelegate::createEditor(QWidget *parent, const QStyleOptionV
 // Set the content, and if the item is a file, set the selection on focus gain to exclude the file extension.
 void FilenameEditDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const
 {
-    FilenameLineEdit *lineEdit = (FilenameLineEdit *)editor;
+    FilenameLineEdit *lineEdit = dynamic_cast<FilenameLineEdit *>(editor);
     if (!lineEdit) { return; }
 
     QString fileName = index.data().toString();
@@ -78,7 +78,7 @@ void FilenameEditDelegate::setEditorData(QWidget *editor, const QModelIndex &ind
 // Return the edited data back to the QTreeView.
 void FilenameEditDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const
 {
-    FilenameLineEdit *lineEdit = (FilenameLineEdit *)editor;
+    FilenameLineEdit *lineEdit = dynamic_cast<FilenameLineEdit *>(editor);
     if (!lineEdit) { return; }
 
     const QString originalText = lineEdit->text();
@@ -133,7 +133,7 @@ void FilenameEditDelegate::setModelData(QWidget *editor, QAbstractItemModel *mod
 // Override the method for updating the editor's position.
 void FilenameEditDelegate::updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    FilenameLineEdit *lineEdit = (FilenameLineEdit *)editor;
+    FilenameLineEdit *lineEdit = dynamic_cast<FilenameLineEdit *>(editor);
     if (!lineEdit) { return; }
 
     const QWidget *widget = option.widget;

@@ -28,6 +28,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <cmath>
 
 EnvironmentSettings::EnvironmentSettings(SettingsPersistor *persistor, DirSettings *dirSettings):
     BaseSettings{persistor, SETTING_ENVIRONMENT},
@@ -44,8 +45,8 @@ void EnvironmentSettings::doLoad()
     mRecoveryInterval = qBound(10, intValue("recovery_interval", 20), 300);
     mTheme = stringValue("theme","dark");
     mInterfaceFont = stringValue("interface_font", defaultUiFont());
-    mInterfaceFontSize = intValue("interface_font_size",11);
-    mIconZoomFactor = doubleValue("icon_zoom_factor",1.0);
+    mInterfaceFontSize = qBound(6,intValue("interface_font_size",11),72);
+    const auto zoom=doubleValue("icon_zoom_factor",1.0);mIconZoomFactor=std::isfinite(zoom)?qBound(0.5,zoom,3.0):1.0;
     mLanguage = stringValue("language", QLocale::system().name());
     mIconSet = stringValue("icon_set","contrast");
     mUseCustomIconSet = boolValue("use_custom_icon_set", false);
@@ -117,7 +118,7 @@ int EnvironmentSettings::interfaceFontSize() const
 
 void EnvironmentSettings::setInterfaceFontSize(int interfaceFontSize)
 {
-    mInterfaceFontSize = interfaceFontSize;
+    mInterfaceFontSize = qBound(6,interfaceFontSize,72);
 }
 
 QString EnvironmentSettings::language() const
@@ -230,7 +231,7 @@ double EnvironmentSettings::iconZoomFactor() const
 
 void EnvironmentSettings::setIconZoomFactor(double newIconZoomFactor)
 {
-    mIconZoomFactor = newIconZoomFactor;
+    mIconZoomFactor = std::isfinite(newIconZoomFactor)?qBound(0.5,newIconZoomFactor,3.0):1.0;
 }
 
 QString EnvironmentSettings::queryPredefinedTerminalArgumentsPattern(const QString &executable) const

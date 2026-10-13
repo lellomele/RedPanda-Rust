@@ -11,11 +11,12 @@
 #include <QJsonArray>
 #include <functional>
 #include "rusttextedits.h"
-class Editor;class EditorManager;class RustLspClient;class QTreeWidget;class QTreeWidgetItem;class QWidget;
+#include "rustoutlinemodel.h"
+class Editor;class EditorManager;class RustLspClient;class QTreeView;class QWidget;
 class RustNavigation final:public QObject{
     Q_OBJECT
 public:
-    RustNavigation(EditorManager *manager,RustLspClient *client,QTreeWidget *outline,QWidget *window,
+    RustNavigation(EditorManager *manager,RustLspClient *client,QTreeView *outline,QWidget *window,
         const std::function<Editor *(const QString &)> &openFile);
     void attachEditors();
     void references();
@@ -25,6 +26,10 @@ public:
     void macroExpansion();
     void codeActions();
     bool applyEdits(const QJsonObject &workspaceEdit,Editor *source,const QHash<QString,QString> &snapshot,bool preview,const QString &oldName={});
+    void setOutlineOptions(bool name,bool type,bool traits);
+    void setOutlineStyler(RustOutlineModel::Styler styler);
+    void activateOutline(const QModelIndex &index);
+    RustOutlineModel *outlineModel() const {return mOutlineModel;}
 signals:
     void status(const QString &text);
     void referencesReady(const QJsonArray &locations);
@@ -34,18 +39,19 @@ private:
     struct Pending {QString method,text,oldName;QPointer<Editor> editor;QHash<QString,QString> snapshot;};
     Editor *active()const;
     bool synchronize();
+    bool cancelRequests(Editor *editor);
     int request(const QString &method,const QJsonObject &extra={},bool workspaceEdit=false);
     void receive(int id,const QString &method,const QString &path,int version,const QJsonValue &value);
     void refreshOutline();
-    void fillOutline(const QJsonArray &symbols,QTreeWidgetItem *parent,int depth,int &count);
-    EditorManager *mManager;
+    QPointer<EditorManager> mManager;
     QPointer<RustLspClient> mClient;
     QPointer<QWidget> mWindow;
-    QTreeWidget *mOutline;
+    QPointer<QTreeView> mOutline;
+    QPointer<RustOutlineModel> mOutlineModel;
     std::function<Editor *(const QString &)> mOpen;
     QTimer mRefresh;
     QHash<int,Pending> mPending;
     QHash<QString,QString> mSnapshot;
-    QString mOutlinePath;
+    bool mApplyingEdits=false;
 };
 #endif

@@ -86,6 +86,13 @@ def copy_notices(payload, build):
    shutil.copytree(source,destination,dirs_exist_ok=True)
    origins[component]='Qt SDK or MSYS2 package notice: '+component
  cache=(build/'CMakeCache.txt').read_text(encoding='utf-8')
+ # The Cargo manifest parser is embedded in the IDE, so retain its MIT notice.
+ toml_source=Path(__file__).resolve().parent.parent/'libs/tomlplusplus'
+ if (toml_source/'toml.hpp').is_file():
+  destination=license_root/'tomlplusplus';destination.mkdir(exist_ok=True)
+  for name in ('LICENSE','PROVENANCE.txt'):shutil.copy2(toml_source/name,destination/name)
+  versions['tomlplusplus']='3.4.0';components['tomlplusplus']=['RedPandaRust.exe']
+  origins['tomlplusplus']='https://github.com/marzer/tomlplusplus/tree/v3.4.0'
  if 'LUA_ADDON:BOOL=ON' in cache:
   header=Path(__file__).resolve().parents[3]/'libs/lua/lua/lua.h'
   text=header.read_text(encoding='utf-8');start=text.rfind('/*',0,text.index('* Copyright (C) 1994-2023 Lua.org'))

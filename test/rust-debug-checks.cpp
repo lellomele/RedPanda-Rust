@@ -173,6 +173,27 @@ private slots:
         QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(stops.count(),1,30000);session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,10000);
     }
     void destroyDuringStart(){auto session=new RustDebugSession;QVERIFY(session->launch(mProgram,mTemp.path()));delete session;QTest::qWait(500);}
+    void stopFromStartingCallbackAndRetry(){
+        RustDebugSession session;QSignalSpy done(&session,&RustDebugSession::finished);bool once=true;
+        connect(&session,&RustDebugSession::stateChanged,this,[&](RustDebugSession::State state){if(once&&state==RustDebugSession::State::Starting){once=false;session.stop();}});
+        QVERIFY(!session.launch(mProgram,mTemp.path()));QTRY_COMPARE_WITH_TIMEOUT(session.state(),RustDebugSession::State::Idle,10000);QCOMPARE(done.count(),1);
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(session.state(),RustDebugSession::State::Stopped,30000);
+        session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),2,10000);
+    }
+    void stopFromStoppedStateCallback(){
+        RustDebugSession session;QSignalSpy stops(&session,&RustDebugSession::stopped),done(&session,&RustDebugSession::finished);
+        connect(&session,&RustDebugSession::stateChanged,this,[&](RustDebugSession::State state){if(state==RustDebugSession::State::Stopped)session.stop();});
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
+        QCOMPARE(stops.count(),0);QCOMPARE(session.state(),RustDebugSession::State::Idle);
+    }
+    void finishCallbackCannotLaunchBeforeCleanupCompletes(){
+        RustDebugSession session;QSignalSpy done(&session,&RustDebugSession::finished);bool accepted=true;
+        const auto connection=connect(&session,&RustDebugSession::finished,this,[&]{accepted=session.launch(mProgram,mTemp.path());});
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(session.state(),RustDebugSession::State::Stopped,30000);
+        session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,10000);QVERIFY(!accepted);disconnect(connection);
+        QVERIFY(session.launch(mProgram,mTemp.path(),{},QProcessEnvironment::systemEnvironment(),true));QTRY_COMPARE_WITH_TIMEOUT(session.state(),RustDebugSession::State::Stopped,30000);
+        session.stop();QTRY_COMPARE_WITH_TIMEOUT(done.count(),2,10000);
+    }
     void faultyAdapter_data(){QTest::addColumn<QByteArray>("mode");QTest::newRow("authentication")<<QByteArray("auth");QTest::newRow("malformed-header")<<QByteArray("header");QTest::newRow("early-exit")<<QByteArray("crash");}
     void faultyAdapter(){
         QFETCH(QByteArray,mode);qputenv("REDPANDA_FAKE_DAP_MODE",mode);QString message;

@@ -6,6 +6,7 @@
 #include "editor.h"
 #include "editormanager.h"
 #include <QTreeWidget>
+#include <QTreeView>
 #include <QInputDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -23,60 +24,88 @@
 #include <QEventLoop>
 #include <QElapsedTimer>
 #include <QStringConverter>
+#include <QComboBox>
+#include <cmath>
 namespace {
 QString text(Editor *editor){return editor->text().replace("\r\n","\n").replace('\r','\n');}
 QString path(const QString &value){return QDir::cleanPath(QFileInfo(value).absoluteFilePath());}
-bool rust(Editor *editor){return editor&&editor->syntaxer()&&editor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust;}
+QString prompt(QWidget *parent,const QString &title,const QString &label,const QString &initial,bool &ok,const QStringList &items={}){
+    auto dialog=new QInputDialog(parent);const QPointer<QInputDialog> guard(dialog);
+    dialog->setWindowTitle(title);dialog->setLabelText(label);
+    if(!items.isEmpty()){dialog->setComboBoxItems(items);dialog->setComboBoxEditable(false);}
+    dialog->setTextValue(initial);const int result=dialog->exec();ok=guard&&result==QDialog::Accepted;
+    const auto value=ok?guard->textValue():QString{};if(guard)guard->deleteLater();return value;
 }
-RustNavigation::RustNavigation(EditorManager *manager,RustLspClient *client,QTreeWidget *outline,QWidget *window,const std::function<Editor *(const QString &)> &open):QObject(window),mManager(manager),mClient(client),mWindow(window),mOutline(outline),mOpen(open){
+bool rust(Editor *editor){return editor&&!editor->removing()&&editor->syntaxer()&&editor->syntaxer()->language()==QSynedit::ProgrammingLanguage::Rust;}
+}
+RustNavigation::RustNavigation(EditorManager *manager,RustLspClient *client,QTreeView *outline,QWidget *window,const std::function<Editor *(const QString &)> &open):QObject(window),mManager(manager),mClient(client),mWindow(window),mOutline(outline),mOutlineModel(new RustOutlineModel(outline)),mOpen(open){
+    outline->setModel(mOutlineModel);outline->setUniformRowHeights(true);
+    connect(mOutlineModel,&RustOutlineModel::rejected,this,&RustNavigation::status);
     mRefresh.setSingleShot(true);mRefresh.setInterval(500);connect(&mRefresh,&QTimer::timeout,this,&RustNavigation::refreshOutline);
     connect(client,&RustLspClient::result,this,&RustNavigation::receive);
-    connect(client,&RustLspClient::readyChanged,this,[this](bool ready){if(ready)mRefresh.start();else{mPending.clear();mOutline->clear();}});
+    connect(client,&RustLspClient::readyChanged,this,[this](bool ready){if(ready)mRefresh.start();else{mPending.clear();if(mOutlineModel)mOutlineModel->clear();}});
     connect(manager,&EditorManager::editorOpenned,this,&RustNavigation::attachEditors);
-    connect(outline,&QTreeWidget::itemActivated,this,[this](QTreeWidgetItem *item){
-        if(!item||mOutlinePath.isEmpty())return;
-        // Opening/activating the editor emits focus signals synchronously.
-        // Those signals may clear the tree and delete item: copy everything
-        // before calling code that can change focus or rebuild the outline.
-        const QString filename=mOutlinePath;
-        const auto position=item->data(0,Qt::UserRole).toJsonObject();
-        const int line=position.value("line").toInt(-1),character=position.value("character").toInt(-1);
-        if(line<0||character<0)return;
-        auto editor=mOpen(filename);
-        if(editor&&line>=0&&line<editor->lineCount()&&character>=0&&character<=editor->lineText(line).size())editor->setCaretXYCentered({character,line});
-    });attachEditors();
+    connect(outline,&QTreeView::activated,this,&RustNavigation::activateOutline);attachEditors();
+}
+void RustNavigation::activateOutline(const QModelIndex &index){
+    if(!mOutlineModel)return;const auto target=mOutlineModel->location(index);if(!target.valid)return;
+    const QPointer<RustNavigation> self(this);const QPointer<Editor> editor=mOpen(target.file);
+    if(!self||!editor)return;
+    if(text(editor)!=target.source){mRefresh.start();emit status(tr("La struttura è superata: aggiornamento in corso."));return;}
+    if(target.line>=0&&target.line<editor->lineCount()&&target.character>=0&&target.character<=editor->lineText(target.line).size())editor->setCaretXYCentered({target.character,target.line});
+}
+void RustNavigation::setOutlineOptions(bool name,bool type,bool traits){if(mOutlineModel)mOutlineModel->setOptions(name,type,traits);}
+void RustNavigation::setOutlineStyler(RustOutlineModel::Styler styler){
+    const QPointer<RustNavigation> self(this);if(mOutlineModel)mOutlineModel->setStyler(std::move(styler));if(self&&mOutline)mOutline->viewport()->update();
 }
 void RustNavigation::attachEditors(){
-    for(int i=0;i<mManager->pageCount();++i){auto editor=(*mManager)[i];if(editor->property("rustNavigationAttached").toBool())continue;editor->setProperty("rustNavigationAttached",true);
+    if(!mManager)return;
+    for(int i=0;i<mManager->pageCount();++i){auto editor=(*mManager)[i];if(!editor||editor->removing()||editor->property("rustNavigationAttached").toBool())continue;editor->setProperty("rustNavigationAttached",true);
         connect(editor,&Editor::focusInOccured,this,[this,editor]{
-            if(mOutlinePath!=path(editor->filename())){mOutline->clear();mOutlinePath.clear();}
-            mRefresh.start();
+            const QPointer<RustNavigation> self(this);
+            if(mOutlineModel&&mOutlineModel->file()!=path(editor->filename()))mOutlineModel->clear();
+            if(self)mRefresh.start();
         });
         connect(editor,&QSynedit::QSynEdit::changed,this,[this,editor]{
-            for(int id:mPending.keys())if(mPending[id].editor==editor){if(mClient)mClient->cancel(id);mPending.remove(id);}mRefresh.start();
+            if(cancelRequests(editor))mRefresh.start();
         });
         connect(editor,&Editor::aboutToDestroy,this,[this,editor]{
-            for(int id:mPending.keys())if(mPending[id].editor==editor){if(mClient)mClient->cancel(id);mPending.remove(id);}
-            if(mOutlinePath==path(editor->filename())){mOutlinePath.clear();mOutline->clear();}mRefresh.start();
+            const auto closedPath=path(editor->filename());if(!cancelRequests(editor))return;
+            const QPointer<RustNavigation> self(this);
+            if(mOutlineModel&&mOutlineModel->file()==closedPath)mOutlineModel->clear();if(self)mRefresh.start();
         },Qt::DirectConnection);
     }
-    mOutline->clear();mOutlinePath.clear();mRefresh.start();
+    const QPointer<RustNavigation> self(this);if(mOutlineModel)mOutlineModel->clear();if(self)mRefresh.start();
 }
-Editor *RustNavigation::active()const{auto editor=mManager->getEditor();return rust(editor)&&!editor->isNew()?editor:nullptr;}
+Editor *RustNavigation::active()const{auto editor=mManager?mManager->getEditor():nullptr;return rust(editor)&&!editor->isNew()?editor:nullptr;}
+bool RustNavigation::cancelRequests(Editor *editor){
+    const QPointer<RustNavigation> self(this);const auto ids=mPending.keys();
+    for(int id:ids)if(mPending.value(id).editor==editor){mPending.remove(id);if(mClient)mClient->cancel(id);if(!self)return false;}return true;
+}
 bool RustNavigation::synchronize(){
-    if(!mClient)return false;mSnapshot.clear();
-    for(int i=0;i<mManager->pageCount();++i){auto editor=(*mManager)[i];if(!rust(editor)||editor->isNew())continue;const auto value=text(editor);mSnapshot.insert(path(editor->filename()),value);mClient->updateDocument(editor->filename(),value);}
-    return mClient->synchronizeAll()&&mClient->analysisReady();
+    if(!mClient||!mManager)return false;const QPointer<RustNavigation> self(this);mSnapshot.clear();
+    QList<QPointer<Editor>> editors;for(int i=0;i<mManager->pageCount();++i)editors.append((*mManager)[i]);
+    for(const auto &editor:editors){if(!rust(editor)||editor->isNew())continue;const auto value=text(editor);const auto file=editor->filename();mSnapshot.insert(path(file),value);
+        const int version=mClient->updateDocument(file,value);if(!self||!mClient||!mManager||!version||!rust(editor)||text(editor)!=value)return false;
+    }
+    const bool ready=mClient->synchronizeAll();return self&&mClient&&ready&&mClient->analysisReady();
 }
 int RustNavigation::request(const QString &method,const QJsonObject &extra,bool edit){
-    const auto editor=active();if(!editor||!synchronize()){emit status(tr("Apri un file Rust salvato e attendi l'avvio dell'analisi."));return 0;}
-    const auto position=editor->caretXY();const auto id=mClient->requestAt(method,editor->filename(),position.line,position.ch,extra);
-    if(id)mPending.insert(id,{method,text(editor),editor->wordAtCursor(),editor,edit?mSnapshot:QHash<QString,QString>{}});return id;
+    const QPointer<RustNavigation> self(this);const QPointer<Editor> editor(active());const auto before=editor?text(editor):QString{};
+    const bool ready=editor&&synchronize();if(!self)return 0;
+    if(!ready||!mClient||!rust(editor)||editor!=active()||text(editor)!=before){emit status(tr("Apri un file Rust salvato e attendi l'avvio dell'analisi."));return 0;}
+    const auto position=editor->caretXY();const auto word=editor->wordAtCursor();const auto file=editor->filename();
+    const auto id=mClient->requestAt(method,file,position.line,position.ch,extra);
+    if(!self||!rust(editor)||!mClient)return 0;
+    if(id)mPending.insert(id,{method,before,word,editor,edit?mSnapshot:QHash<QString,QString>{}});return id;
 }
 void RustNavigation::references(){request("textDocument/references",{{"context",QJsonObject{{"includeDeclaration",true}}}});}
 void RustNavigation::rename(){
-    const auto editor=active();if(!editor||editor->readOnly())return;bool ok=false;const auto name=QInputDialog::getText(mWindow,tr("Rinomina simbolo Rust"),tr("Nuovo nome:"),QLineEdit::Normal,editor->wordAtCursor(),&ok);
-    if(!ok)return;const QRegularExpression identifier("^(?:r#)?[\\p{L}_][\\p{L}\\p{N}_]*$");
+    const QPointer<RustNavigation> self(this);const QPointer<Editor> editor(active());if(!editor||editor->readOnly())return;
+    const auto before=text(editor);const auto caret=editor->caretXY();bool ok=false;
+    const auto name=prompt(mWindow,tr("Rinomina simbolo Rust"),tr("Nuovo nome:"),editor->wordAtCursor(),ok);
+    if(!self||!ok)return;
+    if(!editor||editor!=active()||editor->readOnly()||text(editor)!=before||editor->caretXY()!=caret){emit status(tr("Il documento o la posizione sono cambiati: ripetere la rinomina."));return;}const QRegularExpression identifier("^(?:r#)?[\\p{L}_][\\p{L}\\p{N}_]*$");
     if(!identifier.match(name).hasMatch()){emit status(tr("Il nuovo nome non è un identificatore Rust valido."));return;}request("textDocument/rename",{{"newName",name}},true);
 }
 int RustNavigation::renameTo(const QString &name){return request("textDocument/rename",{{"newName",name}},true);}
@@ -87,28 +116,27 @@ void RustNavigation::codeActions(){
     request("textDocument/codeAction",{{"range",QJsonObject{{"start",position},{"end",position}}},{"context",QJsonObject{{"diagnostics",QJsonArray{}}}}},true);
 }
 void RustNavigation::searchSymbols(){
-    bool ok=false;const auto query=QInputDialog::getText(mWindow,tr("Simboli Rust"),tr("Nome o parte del nome:"),QLineEdit::Normal,{},&ok);
-    if(!ok||query.trimmed().isEmpty()||!synchronize())return;
+    const QPointer<RustNavigation> self(this);bool ok=false;const auto query=prompt(mWindow,tr("Simboli Rust"),tr("Nome o parte del nome:"),{},ok);
+    if(!self||!ok||query.trimmed().isEmpty()||!synchronize()||!self)return;
     const int id=mClient->requestWorkspace("workspace/symbol",{{"query",query.trimmed()}});if(id)mPending.insert(id,{"workspace/symbol",{}, {},nullptr,{}});
 }
 void RustNavigation::refreshOutline(){
-    const auto editor=active();if(!editor){mOutline->clear();mOutlinePath.clear();return;}
-    if(!synchronize()){mRefresh.start(500);return;}
-    for(int id:mPending.keys())if(mPending[id].method=="textDocument/documentSymbol"){mClient->cancel(id);mPending.remove(id);}
-    const auto id=mClient->requestDocument("textDocument/documentSymbol",editor->filename());if(id)mPending.insert(id,{"textDocument/documentSymbol",text(editor),{},editor,{}});
-}
-void RustNavigation::fillOutline(const QJsonArray &symbols,QTreeWidgetItem *parent,int depth,int &count){
-    if(depth>24)return;for(const auto &entry:symbols){if(++count>10000)return;const auto symbol=entry.toObject();
-        auto item=parent?new QTreeWidgetItem(parent):new QTreeWidgetItem(mOutline);item->setText(0,symbol.value("name").toString().left(300));
-        item->setText(1,symbol.value("detail").toString().left(300));auto range=symbol.value("selectionRange").toObject();if(range.isEmpty())range=symbol.value("location").toObject().value("range").toObject();
-        item->setData(0,Qt::UserRole,range.value("start"));fillOutline(symbol.value("children").toArray(),item,depth+1,count);
-    }
+    const QPointer<RustNavigation> self(this);const QPointer<Editor> editor(active());if(!editor){if(mOutlineModel)mOutlineModel->clear();return;}
+    const bool synchronized=synchronize();if(!self)return;if(!synchronized){mRefresh.start(500);return;}
+    if(!rust(editor)||editor!=active()||!mClient)return;
+    for(int id:mPending.keys())if(mPending.value(id).method=="textDocument/documentSymbol"){mPending.remove(id);mClient->cancel(id);if(!self||!mClient||!rust(editor))return;}
+    const auto source=text(editor),file=editor->filename();const auto id=mClient->requestDocument("textDocument/documentSymbol",file);if(!self||!rust(editor))return;
+    if(id)mPending.insert(id,{"textDocument/documentSymbol",source,{},editor,{}});
 }
 void RustNavigation::receive(int id,const QString &,const QString &,int,const QJsonValue &value){
     if(!mPending.contains(id))return;const auto pending=mPending.take(id);
     if(pending.editor&&(!rust(pending.editor)||text(pending.editor)!=pending.text))return;
     if(pending.method=="textDocument/documentSymbol"){
-        if(!pending.editor||pending.editor!=active())return;mOutline->clear();mOutlinePath=path(pending.editor->filename());int count=0;fillOutline(value.toArray(),nullptr,0,count);mOutline->expandToDepth(1);
+        if(!pending.editor||pending.editor!=active()||!mOutlineModel)return;
+        const QPointer<RustNavigation> self(this);QString error;
+        if(!value.isArray()){emit status(tr("Risposta Struttura Rust non valida."));return;}
+        const bool ok=mOutlineModel->setSymbols(value.toArray(),path(pending.editor->filename()),pending.text,error);
+        if(!self)return;if(!ok){emit status(error);return;}if(mOutline)mOutline->expandToDepth(1);
     }else if(pending.method=="textDocument/references")emit referencesReady(value.toArray());
     else if(pending.method=="rust-analyzer/expandMacro"){
         const auto object=value.toObject();if(!object.value("expansion").toString().isEmpty())emit generatedText(tr("Espansione %1").arg(object.value("name").toString()),object.value("expansion").toString());else emit status(tr("Nessuna macro espandibile alla posizione corrente."));
@@ -121,8 +149,11 @@ void RustNavigation::receive(int id,const QString &,const QString &,int,const QJ
         const auto actions=value.toArray();QStringList titles;QVector<QJsonObject> supported;
         for(const auto &entry:actions){const auto action=entry.toObject();if((action.contains("edit")||action.contains("data"))&&!action.contains("disabled")){supported.append(action);titles.append(action.value("title").toString());}}
         if(supported.isEmpty()){emit status(tr("Nessuna azione applicabile alla posizione corrente."));return;}
-        bool ok=false;const auto title=QInputDialog::getItem(mWindow,tr("Azioni Rust"),tr("Azione:"),titles,0,false,&ok);if(!ok)return;
-        const auto chosen=supported[titles.indexOf(title)];
+        const QPointer<RustNavigation> self(this);bool ok=false;const auto title=prompt(mWindow,tr("Azioni Rust"),tr("Azione:"),titles.first(),ok,titles);
+        if(!self||!ok||!pending.editor)return;
+        if(!rust(pending.editor)||pending.editor->readOnly()||text(pending.editor)!=pending.text){emit status(tr("Il documento è cambiato durante la scelta dell'azione: ripetere la richiesta."));return;}
+        const int chosenIndex=titles.indexOf(title);if(chosenIndex<0||chosenIndex>=supported.size())return;
+        const auto chosen=supported[chosenIndex];
         if(pending.editor&&chosen.contains("edit"))applyEdits(chosen.value("edit").toObject(),pending.editor,pending.snapshot,true);
         else if(mClient&&pending.editor){const auto id=mClient->requestWorkspace("codeAction/resolve",chosen);if(id){auto next=pending;next.method="codeAction/resolve";mPending.insert(id,next);}}
     }else if(pending.method=="codeAction/resolve"){
@@ -131,10 +162,14 @@ void RustNavigation::receive(int id,const QString &,const QString &,int,const QJ
     }
 }
 bool RustNavigation::applyEdits(const QJsonObject &workspaceEdit,Editor *source,const QHash<QString,QString> &snapshot,bool preview,const QString &oldName){
-    if(!source||source->isNew()||source->readOnly())return false;
+    if(mApplyingEdits||!mManager||!source||source->isNew()||source->readOnly())return false;
+    const QPointer<RustNavigation> self(this);const QPointer<Editor> sourceGuard(source);
+    mApplyingEdits=true;const auto release=finally([self]{if(self)self->mApplyingEdits=false;});
     auto reject=[&](const QString &message){emit status(message);return false;};
     auto root=RustWorkspace::findRoot(source->filename());if(root.isEmpty())root=QFileInfo(source->filename()).absolutePath();root=QFileInfo(root).canonicalFilePath();
     if(root.isEmpty())return reject(tr("Cartella del progetto non disponibile."));
+    if((workspaceEdit.contains("changes")&&!workspaceEdit.value("changes").isObject())
+        ||(workspaceEdit.contains("documentChanges")&&!workspaceEdit.value("documentChanges").isArray()))return reject(tr("Formato delle modifiche non valido."));
     QHash<QString,QJsonArray> changes;QHash<QString,int> versions;
     auto collect=[&](const QString &uri,const QJsonArray &edits,int version){
         const QUrl url(uri);if(!url.isLocalFile())return false;const auto file=path(url.toLocalFile());const auto canonical=QFileInfo(file).canonicalFilePath();
@@ -148,8 +183,12 @@ bool RustNavigation::applyEdits(const QJsonObject &workspaceEdit,Editor *source,
     };
     const auto simple=workspaceEdit.value("changes").toObject();for(auto it=simple.begin();it!=simple.end();++it)if(!it.value().isArray()||!collect(it.key(),it.value().toArray(),-1))return reject(tr("Modifiche fuori dal progetto o non valide; nessun testo modificato."));
     for(const auto &entry:workspaceEdit.value("documentChanges").toArray()){
+        if(!entry.isObject())return reject(tr("Modifica del documento non valida."));
         const auto edit=entry.toObject();if(edit.contains("kind"))return reject(tr("L'azione richiede operazioni sui file. Usa i comandi di gestione dei file del progetto; nessun testo modificato."));
-        const auto document=edit.value("textDocument").toObject();if(!collect(document.value("uri").toString(),edit.value("edits").toArray(),document.value("version").toInt(-1)))return reject(tr("Modifica del documento non valida."));
+        const auto document=edit.value("textDocument").toObject();const auto version=document.value("version");
+        if(!edit.value("edits").isArray()||!edit.value("textDocument").isObject()
+            ||(!version.isNull()&&!version.isUndefined()&&(!version.isDouble()||version.toDouble()<0||version.toDouble()>INT_MAX||std::floor(version.toDouble())!=version.toDouble())))return reject(tr("Modifica del documento non valida."));
+        if(!collect(document.value("uri").toString(),edit.value("edits").toArray(),version.toInt(-1)))return reject(tr("Modifica del documento non valida."));
     }
     if(changes.isEmpty())return reject(tr("Nessuna modifica proposta."));
     struct Candidate{QString file,before,after;QVector<RustTextEdits::Edit> edits;QPointer<Editor> editor;};QVector<Candidate> candidates;int count=0;
@@ -169,19 +208,36 @@ bool RustNavigation::applyEdits(const QJsonObject &workspaceEdit,Editor *source,
         count+=candidate.edits.size();candidates.append(candidate);
     }
     if(preview){
-        QDialog dialog(mWindow);dialog.setObjectName("rustWorkspaceEditPreview");dialog.setWindowTitle(tr("Anteprima modifiche Rust"));dialog.resize(800,500);auto layout=new QVBoxLayout(&dialog);
-        layout->addWidget(new QLabel(tr("%1 modifiche in %2 documenti. Il testo verrà aggiornato negli editor; i file saranno scritti solo con Salva/Salva tutto.").arg(count).arg(candidates.size()),&dialog));
-        auto split=new QSplitter(&dialog);auto list=new QTreeWidget(split);list->setHeaderLabels({tr("File"),tr("Modifiche")});auto after=new QPlainTextEdit(split);after->setReadOnly(true);after->setLineWrapMode(QPlainTextEdit::NoWrap);layout->addWidget(split);
+        auto dialog=new QDialog(mWindow);const QPointer<QDialog> dialogGuard(dialog);dialog->setObjectName("rustWorkspaceEditPreview");dialog->setWindowTitle(tr("Anteprima modifiche Rust"));dialog->resize(800,500);auto layout=new QVBoxLayout(dialog);
+        layout->addWidget(new QLabel(tr("%1 modifiche in %2 documenti. Il testo verrà aggiornato negli editor; i file saranno scritti solo con Salva/Salva tutto.").arg(count).arg(candidates.size()),dialog));
+        auto split=new QSplitter(dialog);auto list=new QTreeWidget(split);list->setHeaderLabels({tr("File"),tr("Modifiche")});auto after=new QPlainTextEdit(split);after->setReadOnly(true);after->setLineWrapMode(QPlainTextEdit::NoWrap);layout->addWidget(split);
         for(int i=0;i<candidates.size();++i){const auto &candidate=candidates[i];auto item=new QTreeWidgetItem(list,{candidate.file,QString::number(candidate.edits.size())});item->setData(0,Qt::UserRole,i);}list->resizeColumnToContents(0);
-        connect(list,&QTreeWidget::currentItemChanged,&dialog,[&](QTreeWidgetItem *item){if(item)after->setPlainText(candidates[item->data(0,Qt::UserRole).toInt()].after);});list->setCurrentItem(list->topLevelItem(0));
-        auto buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-        if(dialog.exec()!=QDialog::Accepted)return false;
+        connect(list,&QTreeWidget::currentItemChanged,dialog,[candidates,after](QTreeWidgetItem *item){if(!item)return;const int row=item->data(0,Qt::UserRole).toInt();if(row>=0&&row<candidates.size())after->setPlainText(candidates[row].after);});list->setCurrentItem(list->topLevelItem(0));
+        auto buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);layout->addWidget(buttons);connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,dialog,&QDialog::reject);
+        const int result=dialog->exec();if(dialogGuard)dialogGuard->deleteLater();
+        if(!self||!sourceGuard||!dialogGuard||result!=QDialog::Accepted)return false;
     }
     // Open and validate every target before changing any buffer. Saving remains
     // explicit and reuses the inherited atomic-save and recovery machinery.
-    for(auto &candidate:candidates){if(!candidate.editor)candidate.editor=mOpen(candidate.file);if(!candidate.editor||candidate.editor->readOnly()||text(candidate.editor)!=candidate.before)return reject(tr("Un documento è cambiato o non si apre; nessuna modifica applicata."));}
-    for(auto &candidate:candidates){auto editor=candidate.editor.data();editor->beginEditing();const auto cleanup=finally([editor]{editor->endEditing();});
-        editor->setCaretAndSelection({0,0},{0,0},editor->fileEnd());editor->setSelText(candidate.after);
+    for(auto &candidate:candidates){
+        if(!candidate.editor)candidate.editor=mOpen(candidate.file);
+        if(!self||!sourceGuard||!mManager)return false;
+        if(!candidate.editor||candidate.editor->removing()||candidate.editor->readOnly()||mManager->getOpenedEditor(candidate.file)!=candidate.editor||path(candidate.editor->filename())!=candidate.file||text(candidate.editor)!=candidate.before)return reject(tr("Un documento è cambiato o non si apre; nessuna modifica applicata."));
     }
-    synchronize();emit editsApplied(candidates.size(),count);emit status(tr("Modifiche applicate negli editor. Usa Salva tutto per scriverle su disco."));return true;
+    // Opening the last file can alter an earlier target. Revalidate the entire
+    // set after all open/focus callbacks, before starting any editing block.
+    for(const auto &candidate:candidates)if(!candidate.editor||candidate.editor->removing()||candidate.editor->readOnly()||mManager->getOpenedEditor(candidate.file)!=candidate.editor||path(candidate.editor->filename())!=candidate.file||text(candidate.editor)!=candidate.before)return reject(tr("Un documento è cambiato durante l'apertura; nessuna modifica applicata."));
+    QVector<QPointer<Editor>> editing;editing.reserve(candidates.size());
+    const auto cleanup=finally([&editing]{for(const auto &editor:editing)if(editor)editor->endEditing();});
+    for(const auto &candidate:candidates){const auto editor=candidate.editor;if(!editor||editor->removing())return false;editor->beginEditing();editing.append(editor);}
+    for(auto &candidate:candidates){const auto editor=candidate.editor;
+        if(!self||!editor||editor->removing()||editor->readOnly()||text(editor)!=candidate.before)return self?reject(tr("Un documento è cambiato durante l'applicazione. Controlla i buffer e usa Annulla per le modifiche già applicate.")):false;
+        editor->setCaretAndSelection({0,0},{0,0},editor->fileEnd());
+        if(!self||!editor)return false;editor->setSelText(candidate.after);
+    }
+    // Close every block before publishing the result; changed notifications
+    // then observe the complete set rather than the first changed document.
+    while(!editing.isEmpty()){const auto editor=editing.takeLast();if(editor)editor->endEditing();if(!self)return false;}
+    synchronize();if(!self)return false;emit editsApplied(candidates.size(),count);if(!self)return true;
+    emit status(tr("Modifiche applicate negli editor. Usa Salva tutto per scriverle su disco."));return true;
 }

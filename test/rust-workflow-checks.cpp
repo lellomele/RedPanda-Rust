@@ -22,6 +22,25 @@ private:
 private slots:
     void initTestCase(){qRegisterMetaType<PCompileIssue>();}
     void cleanup(){RustTools::setSettingsFile({});}
+    void reentrantStartFromOutputIsRejected(){
+        QTemporaryDir temp;QVERIFY(temp.isValid());const auto file=temp.filePath("nested.rs");QVERIFY(put(file,"fn main() {}\n"));
+        RustWorkspace workspace;QSignalSpy done(&workspace,&RustWorkspace::finished);bool attempted=false,accepted=true;
+        connect(&workspace,&RustWorkspace::output,this,[&](const QString &){if(!attempted){attempted=true;accepted=workspace.startFile(file,"check");}});
+        QVERIFY(workspace.startFile(file,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);QVERIFY(attempted);QVERIFY(!accepted);QCOMPARE(done.first()[0].toInt(),0);
+    }
+    void cancelFromLaunchOutputAndRetry(){
+        QTemporaryDir temp;QVERIFY(temp.isValid());const auto file=temp.filePath("cancel.rs");QVERIFY(put(file,"fn main() {}\n"));
+        RustWorkspace workspace;bool once=true;connect(&workspace,&RustWorkspace::output,this,[&](const QString &){if(once){once=false;workspace.stop();}});
+        QVERIFY(!workspace.startFile(file,"check"));QVERIFY(!workspace.busy());QSignalSpy done(&workspace,&RustWorkspace::finished);
+        QVERIFY(workspace.startFile(file,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);QCOMPARE(done.first()[0].toInt(),0);
+    }
+    void finishedCallbackCannotOverwriteCompletingOperation(){
+        QTemporaryDir temp;QVERIFY(temp.isValid());const auto file=temp.filePath("finish.rs");QVERIFY(put(file,"fn main() {}\n"));
+        RustWorkspace workspace;QSignalSpy done(&workspace,&RustWorkspace::finished);bool accepted=true;
+        const auto connection=connect(&workspace,&RustWorkspace::finished,this,[&](int,bool){accepted=workspace.startFile(file,"build");});
+        QVERIFY(workspace.startFile(file,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);QVERIFY(!accepted);QCOMPARE(workspace.command(),QString("check"));disconnect(connection);
+        QVERIFY(workspace.startFile(file,"build"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),2,30000);QCOMPARE(done.last()[0].toInt(),0);
+    }
     void syntaxState(){
         QSynedit::RustSyntaxer s;
         QCOMPARE(tokens(s,"/* outer /* inner */"),QString("/* outer /* inner */"));
@@ -84,12 +103,13 @@ private slots:
         QVERIFY(put(code,"fn main() { let _: u32 = \"errore\"; }\n"));
         done.clear();QVERIFY(workspace.start(root,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
         QVERIFY(done.last()[0].toInt()!=0);QVERIFY(!issues.isEmpty());
-        const auto issue=qvariant_cast<PCompileIssue>(issues.first()[0]);QVERIFY(issue);QCOMPARE(issue->line,1);QVERIFY(issue->column>0);
+        const auto issue=qvariant_cast<PCompileIssue>(issues.first()[0]);QVERIFY(issue);QCOMPARE(issue->line,0);QVERIFY(issue->column>0);
         QVERIFY(issue->filename.endsWith("src/main.rs"));QVERIFY(!workspace.busy());
         // Failed process creation must recover and allow another Cargo command.
         const QByteArray oldCargo=qgetenv("CARGO");const QString invalid=temp.path()+"/invalid.exe";
         QVERIFY(put(invalid,"invalid executable"));qputenv("CARGO",invalid.toUtf8());
-        done.clear();QVERIFY(workspace.start(root,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,15000);QCOMPARE(done.last()[0].toInt(),-1);
+        bool idleStateConsistent=true;const auto idle=connect(&workspace,&RustWorkspace::busyChanged,this,[&](bool busy){if(!busy)idleStateConsistent=idleStateConsistent&&!workspace.busy();});
+        done.clear();QVERIFY(workspace.start(root,"check"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,15000);QCOMPARE(done.last()[0].toInt(),-1);QVERIFY(idleStateConsistent);disconnect(idle);
         if(oldCargo.isNull())qunsetenv("CARGO");else qputenv("CARGO",oldCargo);
         QVERIFY(put(code,"use std::io::{self,Write};fn main(){print!(\"READY\");io::stdout().flush().unwrap();let mut s=String::new();io::stdin().read_line(&mut s).unwrap();println!(\"INPUT:{}\",s.trim());for b in [0xF0u8,0x9F,0xA6,0x80]{io::stdout().write_all(&[b]).unwrap();io::stdout().flush().unwrap();std::thread::sleep(std::time::Duration::from_millis(30));}println!();}\n"));
         done.clear();output.clear();bool sent=false;
@@ -130,7 +150,7 @@ private slots:
         QVERIFY(put(file,"fn main(){let _:u32=\"invalid\";}\n"));
         done.clear();output.clear();QVERIFY(workspace.startFile(file,"run"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
         QVERIFY(done.first()[0].toInt()!=0);QVERIFY(!issues.isEmpty());QVERIFY(!output.contains("SINGLE_OK"));
-        QCOMPARE(qvariant_cast<PCompileIssue>(issues.last()[0])->line,1);
+        QCOMPARE(qvariant_cast<PCompileIssue>(issues.last()[0])->line,0);
         QVERIFY(put(file,"fn main(){println!(\"SINGLE_RETRY\");}\n"));
         done.clear();output.clear();QVERIFY(workspace.startFile(file,"run"));QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
         QCOMPARE(done.first()[0].toInt(),0);QVERIFY(output.contains("SINGLE_RETRY"));

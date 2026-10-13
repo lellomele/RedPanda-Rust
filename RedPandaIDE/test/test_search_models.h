@@ -16,6 +16,8 @@ private slots:
     void null_results_and_children_are_rejected();
     void history_limit_and_duplicate_replacement();
     void occurrence_history_replacement_is_consistent();
+    void stale_and_foreign_indexes_do_not_dereference_nodes();
+    void mutation_from_reset_and_insert_is_refused();
 };
 
 #endif

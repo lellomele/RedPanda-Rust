@@ -28,6 +28,9 @@
 #include "utils/parser.h"
 #include <QApplication>
 #include <memory>
+#include <QPointer>
+#include "reformatter/rustformatter.h"
+#include "rusttools.h"
 
 EditorManager::EditorManager(QTabWidget* leftPageWidget,
       QTabWidget* rightPageWidget,
@@ -134,8 +137,12 @@ Editor* EditorManager::newEditor(const QString& filename, const QByteArray& enco
     e->setAutoBackupEnabled(true);
     if (fileExists(filename))
         pMainWindow->fileSystemWatcher()->addPath(filename);
+    const QPointer<Editor> opened(e);
+    candidate.release(); // The tab owns the initialized editor before callbacks.
     parentPageControl->addTab(e, e->caption());
+    if(!opened||opened->removing())return nullptr;
     updateLayout();
+    if(!opened||opened->removing())return nullptr;
     e->setFunctionTooltip(pMainWindow->functionTip());
     e->setCompletionPopup(pMainWindow->completionPopup());
     e->setHeaderCompletionPopup(pMainWindow->headerCompletionPopup());
@@ -174,9 +181,8 @@ Editor* EditorManager::newEditor(const QString& filename, const QByteArray& enco
         }
         //checkSyntaxInBack();
     }
-    Editor *opened=candidate.release();
     emit editorOpenned();
-    return opened;
+    return opened&&!opened->removing()?opened.data():nullptr;
 }
 
 QTabWidget*  EditorManager::getNewEditorPageControl() const {
@@ -240,16 +246,24 @@ void EditorManager::showLayout(LayoutShowType layout)
 
 void EditorManager::doRemoveEditor(Editor *e)
 {
+    if(!e||e->removing())return;
+    const QPointer<Editor> guard(e);
+    e->prepareForRemoval();
+    if(!guard)return;
     QTabWidget* parentPage=findPageControlForEditor(e);
     if (parentPage) {
-        int index = parentPage->indexOf(e);
+        const int index = parentPage->indexOf(e);
         parentPage->removeTab(index);
     }
+    if(!guard)return;
     pMainWindow->fileSystemWatcher()->removePath(e->filename());
     pMainWindow->caretList().removeEditor(e);
     pMainWindow->updateCaretActions();
-    e->setParent(nullptr);
-    delete e;
+    e->hide();
+    // A close request can originate in an editor/model signal. Let that call
+    // stack unwind before destroying the widget and its document/services.
+    // Its tab parent retains ownership if application shutdown comes first.
+    e->deleteLater();
 }
 
 #ifdef ENABLE_SDCC
@@ -403,7 +417,14 @@ void EditorManager::onEditorLineMoved(int fromLine, int toLine)
 
 void EditorManager::onEditorStatusChanged(QSynedit::StatusChanges changes)
 {
-    Editor *e = static_cast<Editor *>(sender());
+    Editor *e = qobject_cast<Editor *>(sender());
+    if(!e||e->removing()||!findPageControlForEditor(e))return;
+    // Background buffers still update their tab caption, but must not replace
+    // the command/status state of the selected editor.
+    if(e!=getEditor()){
+        if(changes.testFlag(QSynedit::StatusChange::ModifyChanged)||changes.testFlag(QSynedit::StatusChange::ReadOnlyChanged)||changes.testFlag(QSynedit::StatusChange::Custom0))updateEditorTabCaption(e);
+        return;
+    }
     if (changes.testFlag(QSynedit::StatusChange::CaretX)
             || changes.testFlag(QSynedit::StatusChange::CaretY)) {
         pMainWindow->updateStatusbarForLineCol(e);
@@ -530,8 +551,12 @@ PCppParser EditorManager::createParserForEditor(Editor *editor)
     return nullptr;
 }
 
-std::unique_ptr<BaseReformatter> EditorManager::createReformatterForEditor(Editor *)
+std::unique_ptr<BaseReformatter> EditorManager::createReformatterForEditor(Editor *editor)
 {
+    if(editor&&editor->fileType()==FileType::RustSource){
+        const QPointer<Editor> guard(editor);const auto file=editor->filename(),before=editor->text();
+        return std::make_unique<RustFormatter>(RustTools::effectivePath("rustfmt"),file,RustTools::edition(),[guard,file,before]{return guard&&!guard->removing()&&!guard->readOnly()&&guard->filename()==file&&guard->text()==before;});
+    }
     const QString &astyle = pSettings->environment().AStylePath();
     QStringList args = pSettings->codeFormatter().getArguments();
     return std::make_unique<AStyleReformatter>(astyle,args,
@@ -563,16 +588,22 @@ Editor* EditorManager::getEditor(int index, QTabWidget* tabsWidget) const {
 
 bool EditorManager::closeEditor(Editor* editor, bool transferFocus, bool force) {
     QMutexLocker locker(&mMutex);
-    if (editor == nullptr)
-        return false;
+    if (!editor||editor->removing()||!findPageControlForEditor(editor))return false;
+    if(editor->property("redpandaCloseInProgress").toBool())return false;
+    const QPointer<Editor> guard(editor);
+    editor->setProperty("redpandaCloseInProgress",true);
+    const auto closeGuard=finally([guard]{if(guard)guard->setProperty("redpandaCloseInProgress",false);});
     if (force) {
         editor->save(true,false);
     } else if (editor->modified()) {
         // ask user if he wants to save
         QMessageBox::StandardButton reply;
-        reply = QMessageBox::question(editor,QObject::tr("Save"),
-                                      QString(QObject::tr("Save changes to %1?")).arg(editor->filename()),
-                                      QMessageBox::Yes|QMessageBox::No|QMessageBox::Cancel);
+        auto question=new QMessageBox(QMessageBox::Question,QObject::tr("Save"),
+            QString(QObject::tr("Save changes to %1?")).arg(editor->filename()),
+            QMessageBox::Yes|QMessageBox::No|QMessageBox::Cancel,editor);
+        const QPointer<QMessageBox> box(question);const auto result=question->exec();
+        if(box)box->deleteLater();if(!guard||guard->removing()||!box)return false;
+        reply=static_cast<QMessageBox::StandardButton>(result);
         if (reply == QMessageBox::Yes) {
             if (!editor->save(false,false))
                 return false;
@@ -582,7 +613,9 @@ bool EditorManager::closeEditor(Editor* editor, bool transferFocus, bool force) 
         }
     }
 
+    if(!guard||guard->removing())return false;
     beginUpdate();
+    const auto updateGuard=finally([this]{endUpdate();});
 //    if (transferFocus && (editor->pageControl()->currentWidget()==editor)) {
 //        //todo: activate & focus the previous editor
 //    }
@@ -615,7 +648,6 @@ bool EditorManager::closeEditor(Editor* editor, bool transferFocus, bool force) 
             pMainWindow->updateClassBrowserForEditor(nullptr);
     }
     emit editorClosed();
-    endUpdate();
     return true;
 }
 
@@ -800,13 +832,13 @@ void EditorManager::showActiveEditorCaret()
 
 void EditorManager::activeEditor(Editor *e, bool focus)
 {
-    if (e==nullptr)
-        return;
+    if (!e||e->removing())return;
+    const QPointer<Editor> guard(e);
     QTabWidget * pageControl = findPageControlForEditor(e);
     if (pageControl!=nullptr) {
         pageControl->setCurrentWidget(e);
-        if (focus)
-            e->setFocus();
+        if (focus&&guard&&!guard->removing())
+            guard->setFocus();
     }
 }
 
@@ -876,6 +908,7 @@ bool EditorManager::closeOthers(Editor *editor)
 void EditorManager::forceCloseEditor(Editor *editor)
 {
     QMutexLocker locker(&mMutex);
+    if(!editor||editor->removing()||!findPageControlForEditor(editor))return;
     beginUpdate();
     doRemoveEditor(editor);
     // Force layout update when creating, destroying or moving editors

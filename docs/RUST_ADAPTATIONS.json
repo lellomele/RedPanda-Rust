@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "platform": "Windows x64; Linux distribution deferred",
+  "architecture": "Qt Widgets and QSynEdit in C++; external Rust toolchain, rust-analyzer LSP and CodeLLDB DAP",
+  "features": [
+    {"feature":"Files, editing, selection, undo/redo, search/replace, bookmarks, TODO, split views","implementation":"Reused QSynEdit and shared Qt services; Rust syntax, indentation and file templates added","checks":["test-qsynedit-*","test-editor-*","GUI large-file lifecycle and editing"]},
+    {"feature":"Projects and build options","implementation":"Cargo manifests and RustProjectOptions replace .dev projects/compiler-set controls; profiles, packages, targets, features, platform, arguments and environment","checks":["test-rust-project","GUI project options"]},
+    {"feature":"Compilation, execution and tests","implementation":"Cargo for projects; rustc for standalone .rs files without Cargo.toml; bounded asynchronous processes and descendants","checks":["test-rust-workflow","GUI Cargo/standalone/retry/input"]},
+    {"feature":"Compiler diagnostics","implementation":"Rust JSON spans converted from one-based Unicode scalar coordinates to zero-based editor UTF-16 coordinates","checks":["test-rust-shared","GUI exact Unicode diagnostic navigation"]},
+    {"feature":"Formatting","implementation":"Explicit Cargo/rustfmt commands and rustfmt buffer formatting on save; Cargo edition and workspace inheritance read through toml++; stale buffers rejected","checks":["test-rust-format","GUI automatic format on save"]},
+    {"feature":"Semantic completion and call tips","implementation":"rust-analyzer; simple LSP snippets, completion preferences, keyword/snippet filters and bounded hints","checks":["test-rust-lsp","test-rust-snippet","GUI semantic completion and preferences"]},
+    {"feature":"Definitions, references and refactoring","implementation":"Inherited definition/declaration/reference/rename actions routed to Rust; F12/Ctrl-click, workspace symbols, code actions, macro expansion and previewed multi-file edits","checks":["test-rust-lsp","test-rust-text-edit","GUI menu/mouse definitions, references, rename and reentry"]},
+    {"feature":"Structure tree","implementation":"Bounded RustOutlineModel with owned snapshots and monotonic IDs; unambiguous inherent impl grouping, colored symbol icons scaled to tree font, name/type/source sorting and trait-impl visibility","checks":["test-rust-outline","Native Windows structure/navigation/preferences/font checks"]},
+    {"feature":"Snippets and templates","implementation":"Rust collections and new-file template in inherited editor preferences; Cargo creates project scaffolds","checks":["test-rust-snippet","GUI native snippet library/insertion/undo"]},
+    {"feature":"Debugging","implementation":"CodeLLDB DAP with ConPTY, source/conditional/hit/log/function breakpoints, run-to-cursor, stepping, threads, stack, variables, watches, value editing, supported data breakpoints, memory and disassembly","checks":["test-rust-debug","test-rust-terminal","GUI real debugger and stale variable dialog"]},
+    {"feature":"Git","implementation":"Reused Git services, asynchronous tool verification and dedicated Rust repository identity","checks":["GUI local stage/commit/branch/merge/remotes/fetch/pull/push","test-windows-askpass-encoding"]},
+    {"feature":"Artifact cleaning","implementation":"Verified Cargo target, preview and recycle bin; source/open-document/link protection, snapshot revalidation, bounded sharing retries, cancellation between moves and retryable partial failures","checks":["test-rust-clean","GUI preview/cancel/protection/rebuild"]},
+    {"feature":"Session and recovery","implementation":"Atomic live folder/file journal, periodic bounded document recovery, native Windows crash log/dump and next-start notice","checks":["test-editor-failure-paths","Native interrupted-session restart","GUI recovery"]},
+    {"feature":"Preferences and identity","implementation":"Rust tool paths/edition, completion/tooltips restored, geometry values bounded; Rust executable/window/about icons and correct copyright/source links","checks":["test-rust-icon","test-editor-settings","GUI preferences/about"]}
+  ],
+  "language_specific_replacements": [
+    "C/C++ compiler sets, .dev projects, headers and compiler/parser flags replaced by Cargo/Rust options and files",
+    "C/C++ preprocess/GIMPLE operations replaced by Rust assembly/LLVM IR where meaningful",
+    "C/C++ inherited-class toggle replaced by visibility of explicit Rust trait implementations",
+    "Competitive-programming C/C++ panels replaced by Cargo/rustc tests",
+    "Header hover and GDB-specific hover controls are not exposed; runtime inspection is in the Rust Debug panel"
+  ],
+  "limits": [
+    "LSP resource operations that create/rename/delete files and arbitrary server commands are not applied",
+    "Complex LSP snippet transforms, nesting and repeated placeholder references are not expanded",
+    "Only unambiguous simple inherent impls are grouped under their declared type; constrained/generic and trait impls retain their own nodes",
+    "Cancellation of recycling waits for the current native operating-system move to finish",
+    "External Rust tools and CodeLLDB are installed/configured separately; Linux delivery is deferred"
+  ]
+}

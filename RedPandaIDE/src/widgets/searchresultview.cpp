@@ -19,12 +19,14 @@
 #include <QPainter>
 #include <QStyledItemDelegate>
 #include <QScopedValueRollback>
+#include <limits>
 
 PSearchResults SearchResultModel::addSearchResults(
         const QString &keyword, QSynedit::SearchOptions options,
         bool useRegex, SearchFileScope scope, const QString &folder,
         const QString &filters, bool searchSubfolders)
 {
+    if(mUpdating)return {};
     const auto added = std::make_shared<SearchResults>(keyword, options, useRegex, scope,
             SearchType::Search, folder, filters, searchSubfolders);
     {
@@ -54,6 +56,7 @@ PSearchResults SearchResultModel::addSearchResults(
 PSearchResults SearchResultModel::addSearchResults(
         const QString &keyword, const QString &symbolScopeFullName, SearchFileScope scope)
 {
+    if(mUpdating)return {};
     const auto added = std::make_shared<SearchResults>(keyword, symbolScopeFullName,
             "", SearchType::FindOccurences, scope);
     {
@@ -111,12 +114,13 @@ PSearchResults SearchResultModel::currentResults()
 
 void SearchResultModel::addResultToSearchResults(PSearchResults results, PSearchResultTreeItem item)
 {
-    if (!results || !item)
+    if (mUpdating || !results || !item || results->results().contains(item))
         return;
     item->parent = nullptr;
     item->results.removeAll(nullptr);
     for (const auto &child : item->results)
         child->parent = item.get();
+    QScopedValueRollback<bool> updating(mUpdating,true);
     const bool notifyModel = results == currentResults();
     if (notifyModel) {
         const int index = results->results().count();
@@ -142,6 +146,7 @@ void SearchResultModel::setCurrentIndex(int index)
 
 void SearchResultModel::clear()
 {
+    if(mUpdating)return;
     {
         QScopedValueRollback<bool> updating(mUpdating, true);
         mTreeModel->beginResetModel();
@@ -156,7 +161,7 @@ void SearchResultModel::clear()
 
 void SearchResultModel::removeSearchResults(int index)
 {
-    if (index < 0 || index >= mSearchResults.size())
+    if (mUpdating || index < 0 || index >= mSearchResults.size())
         return;
     {
         QScopedValueRollback<bool> updating(mUpdating, true);
@@ -182,63 +187,32 @@ SearchResultTreeModel::SearchResultTreeModel(SearchResultModel *model, QObject *
 {
 }
 
-QModelIndex SearchResultTreeModel::index(int row, int column, const QModelIndex &parent) const
-{
-    if (!hasIndex(row,column,parent))
-        return QModelIndex();
-
-    PSearchResults results = mSearchResultModel->currentResults();
-    if (!results)
-        return QModelIndex();
-    SearchResultTreeItem *parentItem=nullptr;
-    PSearchResultTreeItem childItem;
-    if (!parent.isValid()) {
-        parentItem = nullptr;
-        childItem = results->result(row);
-    } else {
-        parentItem = static_cast<SearchResultTreeItem *>(parent.internalPointer());
-        childItem = parentItem->results[row];
-    }
-    if (childItem)
-        return createIndex(row,column,childItem.get());
-    return QModelIndex();
+void SearchResultTreeModel::beginResetModel(){
+    QAbstractItemModel::beginResetModel();mIndexedItems.clear();mItemTokens.clear();
 }
-
-QModelIndex SearchResultTreeModel::parent(const QModelIndex &child) const
-{
-    if (!child.isValid())
-        return QModelIndex();
-    SearchResultTreeItem* item = static_cast<SearchResultTreeItem *>(child.internalPointer());
-    if (!item) {
-        return QModelIndex();
-    } else {
-        if (item->parent==nullptr)
-            return QModelIndex();
-        SearchResultTreeItem* parent = item->parent;
-        const auto results = mSearchResultModel->currentResults();
-        if (!results)
-            return {};
-        for (int row = 0; row < results->results().count(); ++row) {
-            if (results->result(row).get() == parent)
-                return createIndex(row, 0, parent);
-        }
-        return {};
-    }
+quintptr SearchResultTreeModel::token(const PSearchResultTreeItem &item,int row,quintptr parent) const{
+    if(!item)return 0;const auto found=mItemTokens.constFind(item.get());if(found!=mItemTokens.cend())return *found;
+    if(mNextToken==std::numeric_limits<quintptr>::max())return 0;
+    const auto id=mNextToken++;mIndexedItems.insert(id,{item,parent,row});mItemTokens.insert(item.get(),id);return id;
 }
-
-int SearchResultTreeModel::rowCount(const QModelIndex &parent) const
-{
-    if (parent.isValid() && (parent.model() != this || parent.column() != 0))
-        return 0;
-    if (!parent.isValid()){ //root
-        PSearchResults searchResults = mSearchResultModel->currentResults();
-        if (!searchResults)
-            return 0;
-        return searchResults->results().count();
-    }
-    SearchResultTreeItem* item = static_cast<SearchResultTreeItem *>(parent.internalPointer());    if (!item)
-        return 0;
-    return item->results.count();
+PSearchResultTreeItem SearchResultTreeModel::itemForIndex(const QModelIndex &index) const{
+    if(!index.isValid()||index.model()!=this||index.column()!=0||index.row()<0)return {};
+    const auto it=mIndexedItems.constFind(index.internalId());return it!=mIndexedItems.cend()&&it->row==index.row()?it->item:PSearchResultTreeItem{};
+}
+QModelIndex SearchResultTreeModel::index(int row,int column,const QModelIndex &parent) const{
+    if(row<0||column!=0)return {};const auto results=mSearchResultModel->currentResults();if(!results)return {};
+    PSearchResultTreeItem item;quintptr parentId=0;
+    if(!parent.isValid()){if(row>=results->results().size())return {};item=results->result(row);}
+    else{const auto folder=itemForIndex(parent);if(!folder||folder->parent||row>=folder->results.size())return {};parentId=parent.internalId();item=folder->results[row];}
+    const auto id=token(item,row,parentId);return id?createIndex(row,0,id):QModelIndex{};
+}
+QModelIndex SearchResultTreeModel::parent(const QModelIndex &child) const{
+    if(!itemForIndex(child))return {};const auto parentId=mIndexedItems.value(child.internalId()).parent;
+    const auto parent=mIndexedItems.constFind(parentId);return parent!=mIndexedItems.cend()?createIndex(parent->row,0,parentId):QModelIndex{};
+}
+int SearchResultTreeModel::rowCount(const QModelIndex &parent) const{
+    if(!parent.isValid()){const auto results=mSearchResultModel->currentResults();return results?results->results().size():0;}
+    const auto item=itemForIndex(parent);return item&&!item->parent?item->results.size():0;
 }
 
 int SearchResultTreeModel::columnCount(const QModelIndex &) const
@@ -251,7 +225,7 @@ QVariant SearchResultTreeModel::data(const QModelIndex &index, int role) const
     if (!index.isValid()){
         return QVariant();
     }
-    SearchResultTreeItem *item = static_cast<SearchResultTreeItem *>(index.internalPointer());
+    const auto item = itemForIndex(index);
     if (!item)
         return QVariant();
     if (role == Qt::DisplayRole) {
@@ -300,7 +274,7 @@ bool SearchResultTreeModel::getItemFileAndLineChar(const QModelIndex &index, QSt
     if (!index.isValid()){
         return false;
     }
-    SearchResultTreeItem *item = static_cast<SearchResultTreeItem *>(index.internalPointer());
+    const auto item = itemForIndex(index);
     if (!item)
         return false;
 
@@ -311,7 +285,8 @@ bool SearchResultTreeModel::getItemFileAndLineChar(const QModelIndex &index, QSt
         return false;
     }
 
-    SearchResultTreeItem *parent = item->parent;
+    const auto parentInfo=mIndexedItems.value(mIndexedItems.value(index.internalId()).parent);
+    SearchResultTreeItem *parent = parentInfo.item.get();
     if (parent==nullptr) { //is filename
         return false;
     } else {
@@ -327,8 +302,8 @@ Qt::ItemFlags SearchResultTreeModel::flags(const QModelIndex &index) const
 {
     if (!index.isValid() || index.model() != this)
         return Qt::NoItemFlags;
+    const auto item = itemForIndex(index);if(!item)return Qt::NoItemFlags;
     Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
-    const auto *item = static_cast<SearchResultTreeItem *>(index.internalPointer());
     if (mSelectable && item && item->parent)
         flags.setFlag(Qt::ItemIsUserCheckable);
     return flags;
@@ -339,7 +314,7 @@ bool SearchResultTreeModel::setData(const QModelIndex &index, const QVariant &va
     if (!index.isValid()){
         return false;
     }
-    SearchResultTreeItem *item = static_cast<SearchResultTreeItem *>(index.internalPointer());
+    const auto item = itemForIndex(index);
     if (!item)
         return false;
     if (role == Qt::CheckStateRole && mSelectable) {
@@ -372,6 +347,8 @@ bool SearchResultTreeModel::selectable() const
 
 void SearchResultTreeModel::setSelectable(bool newSelectable)
 {
+    if(mSearchResultModel->mUpdating)return;
+    QScopedValueRollback<bool> updating(mSearchResultModel->mUpdating,true);
     if (newSelectable!=mSelectable) {
         mSelectable = newSelectable;
     }
@@ -461,7 +438,7 @@ void SearchResultTreeViewDelegate::paint(QPainter *painter, const QStyleOptionVi
      // or hovered over items in an ItemView)
      option.text = QString();
      style->drawControl(QStyle::CE_ItemViewItem, &option, painter, option.widget);
-     SearchResultTreeItem* item = static_cast<SearchResultTreeItem *>(index.internalPointer());
+     const auto item=mModel->itemForIndex(index);if(!item)return;
 
      QString fullText;
      if (item->parent==nullptr) { //is filename

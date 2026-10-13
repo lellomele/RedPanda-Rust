@@ -674,6 +674,7 @@ QString CppPreprocessor::expandMacros(QString text, const QSet<QString>& macrosT
 }
 
 QString CppPreprocessor::expandMacro(QString &text, const PDefine &define, int &i, bool handleBuffer, const QSet<QString> &macrosToBeIgnored, QSet<QString> &macrosUsed){
+    if(!define)return {};
     if (macrosToBeIgnored.contains(define->name)) {
         return define->name;
     }

@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "editorsettings.h"
+#include <cmath>
 #include "../utils/font.h"
 
 EditorSettings::EditorSettings(SettingsPersistor *persistor):
@@ -170,7 +171,7 @@ int EditorSettings::autoSaveInterval() const
 
 void EditorSettings::setAutoSaveInterval(int newInterval)
 {
-    mAutoSaveInterval = newInterval;
+    mAutoSaveInterval = qBound(1,newInterval,1440);
 }
 
 AutoSaveStrategy EditorSettings::autoSaveStrategy() const
@@ -365,7 +366,7 @@ double EditorSettings::lineSpacing() const
 
 void EditorSettings::setLineSpacing(double newLineSpacing)
 {
-    mLineSpacing = newLineSpacing;
+    mLineSpacing = std::isfinite(newLineSpacing)?qBound(0.8,newLineSpacing,3.0):1.1;
 }
 
 bool EditorSettings::showLeadingSpaces() const
@@ -395,7 +396,7 @@ int EditorSettings::tipsDelay() const
 
 void EditorSettings::setTipsDelay(int newTipsDelay)
 {
-    mTipsDelay = newTipsDelay;
+    mTipsDelay = qBound(50,newTipsDelay,10000);
 }
 
 bool EditorSettings::forceFixedFontWidth() const
@@ -775,7 +776,7 @@ int EditorSettings::gutterFontSize() const
 
 void EditorSettings::setGutterFontSize(int gutterFontSize)
 {
-    mGutterFontSize = gutterFontSize;
+    mGutterFontSize = qBound(6,gutterFontSize,72);
 }
 
 QString EditorSettings::gutterFontName() const
@@ -865,7 +866,7 @@ int EditorSettings::fontSize() const
 
 void EditorSettings::setFontSize(int fontSize)
 {
-    mFontSize = fontSize;
+    mFontSize = qBound(6,fontSize,72);
 }
 
 QString EditorSettings::fontName() const
@@ -1042,7 +1043,7 @@ void EditorSettings::doLoad()
     // indents
     mAutoIndent = boolValue("auto_indent", true);
     mTabToSpaces = boolValue("tab_to_spaces",false);
-    mTabWidth = intValue("tab_width",4);
+    mTabWidth = qBound(1,intValue("tab_width",4),32);
     mShowIndentLines = boolValue("show_indent_lines",true);
     mFillIndents = boolValue("fill_indents", false);
     mRainbowIndentGuides = boolValue("rainbow_indent_guides", true);
@@ -1089,8 +1090,8 @@ void EditorSettings::doLoad()
     } else {
         mFontFamilies = fontFamilies;
     }
-    mFontSize = intValue("font_size",12);
-    mLineSpacing = doubleValue("line_spacing",1.1);
+    mFontSize = qBound(6,intValue("font_size",12),72);
+    const auto spacing=doubleValue("line_spacing",1.1);mLineSpacing=std::isfinite(spacing)?qBound(0.8,spacing,3.0):1.1;
     mForceFixedFontWidth = boolValue("force_fixed_font_width", isCjk());
     // if (mForceFixedFontWidth)
     //     mEnableLigaturesSupport = false;
@@ -1120,7 +1121,7 @@ void EditorSettings::doLoad()
     mGutterUseCustomFont = boolValue("gutter_use_custom_font",false);
 
     mGutterFontName = stringValue("gutter_font_name", defaultMonoFont());
-    mGutterFontSize = intValue("gutter_font_size",12);
+    mGutterFontSize = qBound(6,intValue("gutter_font_size",12),72);
     mGutterFontOnlyMonospaced = boolValue("gutter_font_only_monospaced",true);
 
     //copy
@@ -1159,7 +1160,7 @@ void EditorSettings::doLoad()
     //auto save
     mEnableEditTempBackup = boolValue("enable_edit_temp_backup", false);
     mEnableAutoSave = boolValue("enable_auto_save",false);
-    mAutoSaveInterval = intValue("auto_save_interal",10);
+    mAutoSaveInterval = qBound(1,intValue("auto_save_interal",10),1440);
     mAutoSaveTarget = static_cast<enum AutoSaveTarget>(
                 intValue("auto_save_target",AutoSaveTarget::astCurrentFile));
     mAutoSaveStrategy = static_cast<enum AutoSaveStrategy>(
@@ -1192,7 +1193,7 @@ void EditorSettings::doLoad()
     mEnableHeaderToolTips = boolValue("enable_header_tooltips", true);
     mEnableIssueToolTips = boolValue("enable_issue_tooltips", true);
     mShowFunctionTips = boolValue("show_function_tips",true);
-    mTipsDelay = intValue("tips_delay",500);
+    mTipsDelay = qBound(50,intValue("tips_delay",500),10000);
 }
 
 QSynedit::EditCaretType EditorSettings::caretForOverwrite() const
@@ -1252,7 +1253,7 @@ int EditorSettings::tabWidth() const
 
 void EditorSettings::setTabWidth(int tabWidth)
 {
-    mTabWidth = tabWidth;
+    mTabWidth = qBound(1,tabWidth,32);
 }
 
 bool EditorSettings::tabToSpaces() const
