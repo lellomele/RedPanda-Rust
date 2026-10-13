@@ -43,7 +43,8 @@ RustNavigation::RustNavigation(EditorManager *manager,RustLspClient *client,QTre
     connect(mOutlineModel,&RustOutlineModel::rejected,this,&RustNavigation::status);
     mRefresh.setSingleShot(true);mRefresh.setInterval(500);connect(&mRefresh,&QTimer::timeout,this,&RustNavigation::refreshOutline);
     connect(client,&RustLspClient::result,this,&RustNavigation::receive);
-    connect(client,&RustLspClient::readyChanged,this,[this](bool ready){if(ready)mRefresh.start();else{mPending.clear();if(mOutlineModel)mOutlineModel->clear();}});
+    connect(client,&RustLspClient::readyChanged,this,[this](bool ready){if(ready)scheduleOutlineRefresh();else{mOutlineRetries=0;mPending.clear();if(mOutlineModel)mOutlineModel->clear();}});
+    connect(client,&RustLspClient::indexingFinished,this,&RustNavigation::scheduleOutlineRefresh);
     connect(manager,&EditorManager::editorOpenned,this,&RustNavigation::attachEditors);
     connect(outline,&QTreeView::activated,this,&RustNavigation::activateOutline);attachEditors();
 }
@@ -51,7 +52,7 @@ void RustNavigation::activateOutline(const QModelIndex &index){
     if(!mOutlineModel)return;const auto target=mOutlineModel->location(index);if(!target.valid)return;
     const QPointer<RustNavigation> self(this);const QPointer<Editor> editor=mOpen(target.file);
     if(!self||!editor)return;
-    if(text(editor)!=target.source){mRefresh.start();emit status(tr("La struttura è superata: aggiornamento in corso."));return;}
+    if(text(editor)!=target.source){scheduleOutlineRefresh();emit status(tr("La struttura è superata: aggiornamento in corso."));return;}
     if(target.line>=0&&target.line<editor->lineCount()&&target.character>=0&&target.character<=editor->lineText(target.line).size())editor->setCaretXYCentered({target.character,target.line});
 }
 void RustNavigation::setOutlineOptions(bool name,bool type,bool traits){if(mOutlineModel)mOutlineModel->setOptions(name,type,traits);}
@@ -64,31 +65,31 @@ void RustNavigation::attachEditors(){
         connect(editor,&Editor::focusInOccured,this,[this,editor]{
             const QPointer<RustNavigation> self(this);
             if(mOutlineModel&&mOutlineModel->file()!=path(editor->filename()))mOutlineModel->clear();
-            if(self)mRefresh.start();
+            if(self)scheduleOutlineRefresh();
         });
         connect(editor,&QSynedit::QSynEdit::changed,this,[this,editor]{
-            if(cancelRequests(editor))mRefresh.start();
+            if(cancelRequests(editor))scheduleOutlineRefresh();
         });
         connect(editor,&Editor::aboutToDestroy,this,[this,editor]{
             const auto closedPath=path(editor->filename());if(!cancelRequests(editor))return;
             const QPointer<RustNavigation> self(this);
-            if(mOutlineModel&&mOutlineModel->file()==closedPath)mOutlineModel->clear();if(self)mRefresh.start();
+            if(mOutlineModel&&mOutlineModel->file()==closedPath)mOutlineModel->clear();if(self)scheduleOutlineRefresh();
         },Qt::DirectConnection);
     }
-    const QPointer<RustNavigation> self(this);if(mOutlineModel)mOutlineModel->clear();if(self)mRefresh.start();
+    const QPointer<RustNavigation> self(this);if(mOutlineModel)mOutlineModel->clear();if(self)scheduleOutlineRefresh();
 }
 Editor *RustNavigation::active()const{auto editor=mManager?mManager->getEditor():nullptr;return rust(editor)&&!editor->isNew()?editor:nullptr;}
 bool RustNavigation::cancelRequests(Editor *editor){
     const QPointer<RustNavigation> self(this);const auto ids=mPending.keys();
     for(int id:ids)if(mPending.value(id).editor==editor){mPending.remove(id);if(mClient)mClient->cancel(id);if(!self)return false;}return true;
 }
-bool RustNavigation::synchronize(){
+bool RustNavigation::synchronize(bool waitForAnalysis){
     if(!mClient||!mManager)return false;const QPointer<RustNavigation> self(this);mSnapshot.clear();
     QList<QPointer<Editor>> editors;for(int i=0;i<mManager->pageCount();++i)editors.append((*mManager)[i]);
     for(const auto &editor:editors){if(!rust(editor)||editor->isNew())continue;const auto value=text(editor);const auto file=editor->filename();mSnapshot.insert(path(file),value);
         const int version=mClient->updateDocument(file,value);if(!self||!mClient||!mManager||!version||!rust(editor)||text(editor)!=value)return false;
     }
-    const bool ready=mClient->synchronizeAll();return self&&mClient&&ready&&mClient->analysisReady();
+    const bool ready=mClient->synchronizeAll();return self&&mClient&&ready&&(!waitForAnalysis||mClient->analysisReady());
 }
 int RustNavigation::request(const QString &method,const QJsonObject &extra,bool edit){
     const QPointer<RustNavigation> self(this);const QPointer<Editor> editor(active());const auto before=editor?text(editor):QString{};
@@ -120,13 +121,22 @@ void RustNavigation::searchSymbols(){
     if(!self||!ok||query.trimmed().isEmpty()||!synchronize()||!self)return;
     const int id=mClient->requestWorkspace("workspace/symbol",{{"query",query.trimmed()}});if(id)mPending.insert(id,{"workspace/symbol",{}, {},nullptr,{}});
 }
+void RustNavigation::scheduleOutlineRefresh(){mOutlineRetries=0;mRefresh.start(500);}
+void RustNavigation::retryOutline(){
+    // Indexing can cancel a request even though its source version is current.
+    // Bound retries; editing, focusing or finishing indexing opens a new cycle.
+    if(mOutlineRetries<3)mRefresh.start(500*(1<<mOutlineRetries++));
+    else emit status(tr("Struttura Rust non disponibile: modifica il documento o riavvia rust-analyzer per riprovare."));
+}
 void RustNavigation::refreshOutline(){
     const QPointer<RustNavigation> self(this);const QPointer<Editor> editor(active());if(!editor){if(mOutlineModel)mOutlineModel->clear();return;}
-    const bool synchronized=synchronize();if(!self)return;if(!synchronized){mRefresh.start(500);return;}
+    // Document symbols describe the current syntax tree. They do not need
+    // global semantic indexing, or an experimental server-status notification.
+    const bool synchronized=synchronize(false);if(!self)return;if(!synchronized){mRefresh.start(500);return;}
     if(!rust(editor)||editor!=active()||!mClient)return;
     for(int id:mPending.keys())if(mPending.value(id).method=="textDocument/documentSymbol"){mPending.remove(id);mClient->cancel(id);if(!self||!mClient||!rust(editor))return;}
     const auto source=text(editor),file=editor->filename();const auto id=mClient->requestDocument("textDocument/documentSymbol",file);if(!self||!rust(editor))return;
-    if(id)mPending.insert(id,{"textDocument/documentSymbol",source,{},editor,{}});
+    if(id)mPending.insert(id,{"textDocument/documentSymbol",source,{},editor,{}});else retryOutline();
 }
 void RustNavigation::receive(int id,const QString &,const QString &,int,const QJsonValue &value){
     if(!mPending.contains(id))return;const auto pending=mPending.take(id);
@@ -134,9 +144,10 @@ void RustNavigation::receive(int id,const QString &,const QString &,int,const QJ
     if(pending.method=="textDocument/documentSymbol"){
         if(!pending.editor||pending.editor!=active()||!mOutlineModel)return;
         const QPointer<RustNavigation> self(this);QString error;
+        if(value.isNull()||value.isUndefined()){retryOutline();return;}
         if(!value.isArray()){emit status(tr("Risposta Struttura Rust non valida."));return;}
         const bool ok=mOutlineModel->setSymbols(value.toArray(),path(pending.editor->filename()),pending.text,error);
-        if(!self)return;if(!ok){emit status(error);return;}if(mOutline)mOutline->expandToDepth(1);
+        if(!self)return;if(!ok){emit status(error);return;}mOutlineRetries=0;if(mOutline)mOutline->expandToDepth(1);
     }else if(pending.method=="textDocument/references")emit referencesReady(value.toArray());
     else if(pending.method=="rust-analyzer/expandMacro"){
         const auto object=value.toObject();if(!object.value("expansion").toString().isEmpty())emit generatedText(tr("Espansione %1").arg(object.value("name").toString()),object.value("expansion").toString());else emit status(tr("Nessuna macro espandibile alla posizione corrente."));

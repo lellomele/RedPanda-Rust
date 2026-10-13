@@ -39,6 +39,7 @@ public:
 signals:
     void status(const QString &text);
     void readyChanged(bool ready);
+    void indexingFinished();
     void result(int id,const QString &method,const QString &path,int version,const QJsonValue &value);
     void diagnostics(const QString &path,int version,const QJsonArray &items);
 private:

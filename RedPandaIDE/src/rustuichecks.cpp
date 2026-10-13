@@ -84,6 +84,54 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             QEventLoop wait;QTimer::singleShot(30,&wait,&QEventLoop::quit);wait.exec();}
         return false;
     };
+    const auto editInputs=qEnvironmentVariable("RUST_OUTLINE_EDIT_INPUTS");
+    if(!editInputs.isEmpty()){
+        auto outline=findChild<QTreeView *>("rustOutline");
+        auto model=mRustNavigation?mRustNavigation->outlineModel():nullptr;
+        const std::function<QModelIndex(const QString &,const QModelIndex &)> findSymbol=[&](const QString &name,const QModelIndex &parent)->QModelIndex{
+            if(!model)return {};for(int row=0;row<model->rowCount(parent);++row){const auto index=model->index(row,0,parent);if(model->data(index,RustOutlineModel::NameRole)==name)return index;const auto child=findSymbol(name,index);if(child.isValid())return child;}return {};
+        };
+        const auto waitSymbol=[&](Editor *editor,const QString &name,int timeout){
+            QElapsedTimer elapsed;elapsed.start();bool found=false;
+            while(!(found=model&&model->file()==QDir::cleanPath(editor->filename())&&findSymbol(name,{}).isValid())&&elapsed.elapsed()<timeout)QTest::qWait(25);
+            checks.append(QJsonObject{{"name",QString("Refresh duration: %1").arg(name)},{"passed",found},{"milliseconds",elapsed.elapsed()},{"ready",mRustLanguageClient->ready()},{"analysisReady",mRustLanguageClient->analysisReady()}});
+            return found;
+        };
+        ui->tabExplorer->setCurrentWidget(ui->tabStructure);QApplication::setActiveWindow(this);activateWindow();
+        if(qEnvironmentVariableIsSet("RUST_OUTLINE_BOUNDED_RETRY")){
+            const auto file=QDir(outputDir).filePath("bounded.rs");check("Bounded retry fixture",put(file,"fn bounded() {}\n"));
+            int responses=0;const auto connection=connect(mRustLanguageClient,&RustLspClient::result,this,[&](int,const QString &method,const QString &,int,const QJsonValue &){if(method=="textDocument/documentSymbol")++responses;});
+            QPointer<Editor> editor(openFile(file));check("Bounded retry editor",editor!=nullptr);
+            if(editor){mEditorManager->activeEditor(editor,true);editor->setFocus();QTest::qWait(6500);
+                check("Unavailable outline stops after four attempts",responses==4);QTest::qWait(2000);check("Unavailable outline does not poll forever",responses==4);
+                editor->setCaretXY({0,0});editor->setSelText("//new revision\n");QTest::qWait(5000);check("Editing opens a new bounded retry cycle",responses==8);
+                mEditorManager->forceCloseEditor(editor);QTest::qWait(1000);check("Closing stops outline retries",responses==8);
+            }
+            disconnect(connection);QFile report(outputDir+"/checks.json");if(report.open(QIODevice::WriteOnly))report.write(QJsonDocument(QJsonObject{{"failed",failed},{"checks",checks}}).toJson());
+            return failed?1:0;
+        }
+        struct Input{QString filename,symbol,edited;};
+        QList<QPointer<Editor>> opened;
+        for(const auto &input:QList<Input>{{"didattica_studenti_media.rs","calcola_media","calcola_media_editata"},{"didattica_distributore_carburanti.rs","set","set_editato"}}){
+            QFile file(QDir(editInputs).filePath(input.filename));const bool readable=file.open(QIODevice::ReadOnly);const auto bytes=readable?file.readAll():QByteArray{};
+            const auto copy=QDir(outputDir).filePath(input.filename);check("Copy original "+input.filename,readable&&put(copy,bytes));
+            const auto source=qEnvironmentVariableIsSet("RUST_OUTLINE_EDIT_ORIGINALS")?QDir(editInputs).filePath(input.filename):copy;
+            QPointer<Editor> editor(openFile(source));opened.append(editor);check("Open "+input.filename,editor&&outline&&model);if(!editor||!outline||!model)continue;
+            mEditorManager->activeEditor(editor,true);editor->setFocus();check("Outline before any compilation "+input.filename,waitSymbol(editor,input.symbol,30000));
+            const auto before=editor->text();const auto lines=before.split('\n');int row=-1,column=-1;
+            for(int i=0;i<lines.size();++i){column=lines[i].indexOf("fn "+input.symbol+"(");if(column>=0){row=i;column+=3;break;}}
+            check("Find declaration "+input.filename,row>=0);if(row<0)continue;
+            editor->setCaretAndSelection({column,row},{column,row},{column+input.symbol.size(),row});editor->setSelText(input.edited);
+            check("Outline updates unsaved rename "+input.filename,waitSymbol(editor,input.edited,10000)&&!findSymbol(input.symbol,{}).isValid());
+            QFile disk(source);check("Editing keeps disk unchanged "+input.filename,editor->modified()&&disk.open(QIODevice::ReadOnly)&&disk.readAll()==bytes);
+            editor->undo();check("Outline updates undo "+input.filename,waitSymbol(editor,input.symbol,10000)&&!findSymbol(input.edited,{}).isValid());
+        }
+        for(const auto &editor:opened)if(editor){mEditorManager->activeEditor(editor,true);editor->setFocus();const auto wanted=editor->filename().endsWith("didattica_studenti_media.rs")?"calcola_media":"set";check("Outline follows tab "+QFileInfo(editor->filename()).fileName(),waitSymbol(editor,wanted,10000));}
+        if(outline){outline->expandAll();grab().save(outputDir+"/outline.png");}
+        for(const auto &editor:opened)if(editor)mEditorManager->forceCloseEditor(editor);
+        QFile report(outputDir+"/checks.json");if(report.open(QIODevice::WriteOnly))report.write(QJsonDocument(QJsonObject{{"failed",failed},{"checks",checks}}).toJson());
+        return failed?1:0;
+    }
     const auto outlineInput=qEnvironmentVariable("RUST_OUTLINE_CHECK_SOURCE");
     const auto outlineSource=outlineInput.isEmpty()?QString{}:QFileInfo(outlineInput).absoluteFilePath();
     if(!outlineSource.isEmpty()){

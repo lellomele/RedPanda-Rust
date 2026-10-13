@@ -413,7 +413,12 @@ void RustLspClient::handleMessage(const QJsonObject &message){
         emit diagnostics(file,version,items);return;
     }
     if(method=="experimental/serverStatus"){
+        const bool wasQuiescent=mQuiescent;
         mQuiescent=params.value("quiescent").toBool();
+        if(mReady&&mQuiescent&&!wasQuiescent){
+            const QPointer<RustLspClient> self(this);const auto generation=mGeneration;
+            emit indexingFinished();if(!self||generation!=mGeneration)return;
+        }
         const auto health=params.value("health").toString();
         const auto detail=params.value("message").toString().left(400);
         if(health!="ok"&&!detail.isEmpty())emit status(tr("rust-analyzer: %1").arg(detail));

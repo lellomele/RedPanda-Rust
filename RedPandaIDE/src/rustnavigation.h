@@ -38,11 +38,13 @@ signals:
 private:
     struct Pending {QString method,text,oldName;QPointer<Editor> editor;QHash<QString,QString> snapshot;};
     Editor *active()const;
-    bool synchronize();
+    bool synchronize(bool waitForAnalysis=true);
     bool cancelRequests(Editor *editor);
     int request(const QString &method,const QJsonObject &extra={},bool workspaceEdit=false);
     void receive(int id,const QString &method,const QString &path,int version,const QJsonValue &value);
     void refreshOutline();
+    void scheduleOutlineRefresh();
+    void retryOutline();
     QPointer<EditorManager> mManager;
     QPointer<RustLspClient> mClient;
     QPointer<QWidget> mWindow;
@@ -53,5 +55,6 @@ private:
     QHash<int,Pending> mPending;
     QHash<QString,QString> mSnapshot;
     bool mApplyingEdits=false;
+    int mOutlineRetries=0;
 };
 #endif

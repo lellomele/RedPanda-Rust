@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QThread>
+#include <QRegularExpression>
 #include <cstdio>
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -28,6 +29,8 @@ int fakeServer(){
     const auto logPath=qEnvironmentVariable("REDPANDA_FAKE_LSP_LOG");
     const auto mode=qEnvironmentVariable("REDPANDA_FAKE_LSP_MODE");
     QHash<QString,int> versions;
+    QHash<QString,QString> documents;
+    QSet<QString> cancelledOutline;
     for(;;){
         char line[8192];int length=-1;
         while(std::fgets(line,sizeof(line),stdin)){
@@ -44,12 +47,30 @@ int fakeServer(){
             if(mode=="header"){std::fwrite("Content-Length: -8\r\n\r\n",1,23,stdout);std::fflush(stdout);QThread::msleep(30000);return 9;}
             frame({{"id",message.value("id")},{"result",QJsonObject{{"capabilities",QJsonObject{{"positionEncoding",mode=="encoding"?"utf-8":"utf-16"}}}}}},true);
             frame({{"id","configuration-1"},{"method","workspace/configuration"},{"params",QJsonObject{{"items",QJsonArray{QJsonObject{{"section","rust-analyzer"}}}}}}});
+        }else if(method=="initialized"&&mode=="status"){
+            for(const bool idle:{false,true,true})frame({{"method","experimental/serverStatus"},{"params",QJsonObject{{"quiescent",idle},{"health","ok"}}}});
         }else if(method=="textDocument/didOpen"||method=="textDocument/didChange"){
             const auto document=params.value("textDocument").toObject();const auto uri=document.value("uri").toString();
             versions[uri]=document.value("version").toInt();
+            documents[uri]=method=="textDocument/didOpen"?document.value("text").toString():params.value("contentChanges").toArray().first().toObject().value("text").toString();
             frame({{"method","textDocument/publishDiagnostics"},{"params",QJsonObject{{"uri",uri},{"version",versions[uri]},
                 {"diagnostics",QJsonArray{QJsonObject{{"message","fake semantic error"},{"severity",1},
                 {"range",QJsonObject{{"start",QJsonObject{{"line",0},{"character",3}}},{"end",QJsonObject{{"line",0},{"character",4}}}}}}}}}}});
+        }else if(method=="textDocument/documentSymbol"){
+            // A responsive server is allowed to omit experimental status
+            // notifications. Return symbols from the latest in-memory text.
+            const auto uri=params.value("textDocument").toObject().value("uri").toString();
+            if((mode=="outline-cancel"&&!cancelledOutline.contains(uri))||mode=="outline-cancel-always"){
+                cancelledOutline.insert(uri);frame({{"id",message.value("id")},{"error",QJsonObject{{"code",-32801},{"message","content modified during indexing"}}}});continue;
+            }
+            QJsonArray symbols;const auto lines=documents.value(uri).split('\n');
+            const QRegularExpression declaration("\\bfn\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(");
+            for(int row=0;row<lines.size();++row){const auto match=declaration.match(lines[row]);if(!match.hasMatch())continue;
+                const QJsonObject start{{"line",row},{"character",int(match.capturedStart(1))}},end{{"line",row},{"character",int(match.capturedEnd(1))}};
+                const QJsonObject range{{"start",start},{"end",end}};
+                symbols.append(QJsonObject{{"name",match.captured(1)},{"kind",12},{"range",range},{"selectionRange",range}});
+            }
+            frame({{"id",message.value("id")},{"result",symbols}});
         }else if(method=="textDocument/completion"){
             if(mode=="delay")QThread::msleep(500);
             frame({{"id",message.value("id")},{"result",QJsonArray{QJsonObject{{"label",QString::fromUtf8("città_🦀")},{"insertText","completed"}}}}},true);
@@ -95,6 +116,30 @@ private slots:
         QCOMPARE(client.updateDocument(mFile,"fn changed() {}\n"),2);QTest::qWait(900);QCOMPARE(result.count(),0);
         const int cancelled=client.requestAt("textDocument/completion",mFile,0,3);client.cancel(cancelled);QTest::qWait(900);QCOMPARE(result.count(),0);
         const int fresh=client.requestAt("textDocument/completion",mFile,0,3);QTRY_COMPARE_WITH_TIMEOUT(result.count(),1,10000);QCOMPARE(result.first()[0].toInt(),fresh);QCOMPARE(result.first()[3].toInt(),2);
+    }
+    void documentSymbolsWithoutExperimentalStatus(){
+        RustLspClient client;QSignalSpy results(&client,&RustLspClient::result);
+        QVERIFY(client.updateDocument(mFile,"fn original() {}\n")>0);QTRY_VERIFY_WITH_TIMEOUT(client.ready(),15000);
+        QVERIFY(!client.analysisReady());QVERIFY(client.synchronizeAll());
+        const int first=client.requestDocument("textDocument/documentSymbol",mFile);QVERIFY(first>0);
+        QTRY_COMPARE_WITH_TIMEOUT(results.count(),1,10000);
+        QCOMPARE(results.first()[4].value<QJsonValue>().toArray().first().toObject().value("name").toString(),QString("original"));
+        QVERIFY(client.updateDocument(mFile,"fn unsaved_edit() {}\n")>0);results.clear();QVERIFY(client.synchronizeAll());
+        const int edited=client.requestDocument("textDocument/documentSymbol",mFile);QVERIFY(edited>0);QTRY_COMPARE_WITH_TIMEOUT(results.count(),1,10000);
+        QCOMPARE(results.first()[4].value<QJsonValue>().toArray().first().toObject().value("name").toString(),QString("unsaved_edit"));
+        QFile disk(mFile);QVERIFY(disk.open(QIODevice::ReadOnly));QCOMPARE(disk.readAll(),QByteArray("fn main() {}\n"));QVERIFY(!client.analysisReady());
+    }
+    void indexingFinishedOnlyOnTransition(){
+        qputenv("REDPANDA_FAKE_LSP_MODE","status");RustLspClient client;QSignalSpy finished(&client,&RustLspClient::indexingFinished);
+        QVERIFY(client.updateDocument(mFile,"fn main() {}")>0);QTRY_VERIFY_WITH_TIMEOUT(client.analysisReady(),15000);
+        QCOMPARE(finished.count(),1);QTest::qWait(100);QCOMPARE(finished.count(),1);
+    }
+    void restartFromIndexingFinished(){
+        qputenv("REDPANDA_FAKE_LSP_MODE","status");RustLspClient client;int callbacks=0;
+        connect(&client,&RustLspClient::indexingFinished,this,[&]{if(++callbacks==1){client.closeDocument(mFile);client.restart();}});
+        QVERIFY(client.updateDocument(mFile,"fn main() {}")>0);QTRY_VERIFY_WITH_TIMEOUT(callbacks==1,15000);
+        QCOMPARE(client.version(mFile),0);QVERIFY(!client.ready());
+        QVERIFY(client.updateDocument(mFile,"fn recovered() {}")>0);QTRY_VERIFY_WITH_TIMEOUT(client.analysisReady(),15000);QCOMPARE(callbacks,2);
     }
     void closeDuringStartupAndReopen(){
         RustLspClient client;client.updateDocument(mFile,"fn main() {}\n");client.closeDocument(mFile);
