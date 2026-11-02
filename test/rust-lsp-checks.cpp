@@ -3,6 +3,8 @@
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QThread>
@@ -31,6 +33,7 @@ int fakeServer(){
     QHash<QString,int> versions;
     QHash<QString,QString> documents;
     QSet<QString> cancelledOutline;
+    bool delayedOutline=false;
     for(;;){
         char line[8192];int length=-1;
         while(std::fgets(line,sizeof(line),stdin)){
@@ -57,6 +60,15 @@ int fakeServer(){
                 {"diagnostics",QJsonArray{QJsonObject{{"message","fake semantic error"},{"severity",1},
                 {"range",QJsonObject{{"start",QJsonObject{{"line",0},{"character",3}}},{"end",QJsonObject{{"line",0},{"character",4}}}}}}}}}}});
         }else if(method=="textDocument/documentSymbol"){
+            if(mode=="outline-overlap"&&!delayedOutline){
+                // Keep the first reply in flight until the UI test has edited
+                // the document and opened another tab. Ignore cancellation to
+                // emulate a server that has already started computing a reply.
+                delayedOutline=true;QElapsedTimer deadline;deadline.start();
+                const auto release=QFileInfo(logPath).dir().filePath("overlap-release");
+                while(!QFileInfo::exists(release)&&deadline.elapsed()<30000)QThread::msleep(10);
+                if(!QFileInfo::exists(release))return 11;
+            }
             // A responsive server is allowed to omit experimental status
             // notifications. Return symbols from the latest in-memory text.
             const auto uri=params.value("textDocument").toObject().value("uri").toString();

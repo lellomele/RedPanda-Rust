@@ -98,6 +98,32 @@ int MainWindow::runRustUiChecks(const QString &outputDir){
             return found;
         };
         ui->tabExplorer->setCurrentWidget(ui->tabStructure);QApplication::setActiveWindow(this);activateWindow();
+        if(qEnvironmentVariableIsSet("RUST_OUTLINE_OVERLAP_CHECK")){
+            const auto first=QDir(outputDir).filePath("overlap-first.rs"),second=QDir(outputDir).filePath("overlap-second.rs");
+            const auto release=QDir(outputDir).filePath("overlap-release");QFile::remove(release);
+            const auto traffic=qEnvironmentVariable("REDPANDA_FAKE_LSP_LOG");check("Fresh overlap traffic log",!traffic.isEmpty()&&!QFileInfo::exists(traffic));
+            bool staleShown=false;QMetaObject::Connection resets;
+            if(model)resets=connect(model,&QAbstractItemModel::modelReset,this,[&]{if(findSymbol("first_old",{}).isValid())staleShown=true;});
+            check("Overlap fixtures",put(first,"fn first_old() {}\n")&&put(second,"fn second() {}\n"));
+            QPointer<Editor> a(openFile(first));check("First overlap editor",a!=nullptr);
+            QElapsedTimer deadline;deadline.start();bool pending=false;
+            while(!pending&&deadline.elapsed()<15000){QFile log(traffic);pending=log.open(QIODevice::ReadOnly)&&log.readAll().contains("textDocument/documentSymbol");if(!pending)QTest::qWait(25);}
+            check("First request is in flight",pending);
+            if(a&&pending){
+                a->setCaretAndSelection({3,0},{3,0},{12,0});a->setSelText("first_new");
+                QPointer<Editor> b(openFile(second));check("Second overlap editor",b!=nullptr);
+                if(b){mEditorManager->activeEditor(b,true);b->setFocus();check("Second tab active before old reply",mEditorManager->getEditor()==b);}
+                check("Release stale reply after edit and tab change",put(release,"continue"));
+                if(b)check("Latest tab obtains its symbols",waitSymbol(b,"second",15000));
+                mEditorManager->activeEditor(a,true);a->setFocus();check("Edited tab obtains current symbols",waitSymbol(a,"first_new",15000));
+                check("Outdated first response is never displayed",!staleShown&&!findSymbol("first_old",{}).isValid());
+                if(b)mEditorManager->forceCloseEditor(b);
+            }
+            if(a)mEditorManager->forceCloseEditor(a);
+            disconnect(resets);
+            QFile report(outputDir+"/checks.json");if(report.open(QIODevice::WriteOnly))report.write(QJsonDocument(QJsonObject{{"failed",failed},{"checks",checks}}).toJson());
+            return failed?1:0;
+        }
         if(qEnvironmentVariableIsSet("RUST_OUTLINE_BOUNDED_RETRY")){
             const auto file=QDir(outputDir).filePath("bounded.rs");check("Bounded retry fixture",put(file,"fn bounded() {}\n"));
             int responses=0;const auto connection=connect(mRustLanguageClient,&RustLspClient::result,this,[&](int,const QString &method,const QString &,int,const QJsonValue &){if(method=="textDocument/documentSymbol")++responses;});

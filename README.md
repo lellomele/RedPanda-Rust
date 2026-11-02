@@ -2,7 +2,7 @@
 
 IDE desktop per lo sviluppo e la didattica di Rust, derivata da [RedPanda-CPP di Raffaele Mele](https://github.com/lellomele/RedPanda-CPP), con interfaccia Qt e editor QSynEdit. Include compilazione, esecuzione, test, formattazione, analisi semantica, completamento, refactoring, debug e Git.
 
-**1.0.0-beta.4 per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
+**Versione beta per Windows x64:** versione per la valutazione su esercizi e progetti reali. Conservare una copia dei propri sorgenti e della cartella `config` prima dell'aggiornamento.
 
 ## Installazione
 
@@ -36,7 +36,7 @@ Per il debug passo passo preferire il profilo **Debug**: le ottimizzazioni Relea
 
 Windows 10 versione 1809 o successiva, oppure Windows 11, x64; Rust 1.85+ per l'edizione 2024. La distribuzione Windows è verificata con Qt 6.11.2, Rust/rust-analyzer 1.98.0 e CodeLLDB 1.12.3. La versione Linux è rimandata; si conservano architettura multipiattaforma e risorse desktop per una futura ripresa.
 
-L'indicizzazione iniziale può richiedere tempo. Se rust-analyzer si arresta, la IDE effettua tentativi di riavvio limitati; **Strumenti → Riavvia rust-analyzer** consente di riprovare. Sono analizzati fino a 128 documenti, 8 MiB di testo UTF-16 per documento e 64 MiB complessivi; questi limiti non impediscono di aprire o compilare file più grandi. Le diagnostiche del server sono nell'editor; build/check si eseguono esplicitamente.
+L'indicizzazione iniziale può richiedere tempo. Per l'analisi semantica e la Struttura i file nuovi devono essere salvati almeno una volta; le modifiche successive sono analizzate anche prima del salvataggio. Se rust-analyzer si arresta, la IDE effettua tentativi di riavvio limitati; **Strumenti → Riavvia rust-analyzer** consente di riprovare. Sono analizzati fino a 128 documenti, 8 MiB di testo UTF-16 per documento e 64 MiB complessivi; questi limiti non impediscono di aprire o compilare file più grandi. Le diagnostiche del server sono nell'editor; build/check si eseguono esplicitamente.
 
 Rinomina e azioni modificano i buffer con anteprima e annullamento; il salvataggio resta esplicito. Le operazioni LSP che creano, rinominano o eliminano file e i comandi arbitrari del server sono rifiutati. Gli snippet LSP supportano campi semplici, valori predefiniti e scelte; trasformazioni, campi annidati e riferimenti ripetuti non sono espansi. La formattazione esplicita usa Cargo/rustfmt sui file salvati; l'opzione di formattazione al salvataggio usa rustfmt sul buffer e legge l'edizione Cargo, anche ereditata dal workspace. Un risultato superato viene ignorato; in caso di errore di formattazione il testo originale viene conservato.
 
